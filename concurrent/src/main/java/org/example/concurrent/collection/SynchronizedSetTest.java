@@ -1,8 +1,7 @@
 package org.example.concurrent.collection;
 
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.CountDownLatch;
 
 /**
  * @author ：wenbo.zhangw
@@ -10,23 +9,42 @@ import java.util.Set;
  */
 public class SynchronizedSetTest {
 
-    public static volatile Set<Integer> set = Collections.synchronizedSet(new HashSet<>());
-    public static final Object mutex = new Object();
-//    public static volatile Set<Integer> set = new HashSet<>();
 
-    public static void main(String[] args) {
+    public static void test() throws InterruptedException {
+        // List<Integer> list = Collections.synchronizedList(new ArrayList<>());
+        List<Integer> list = new ArrayList<>();
+        CountDownLatch latch = new CountDownLatch(100);
         for (int i = 0; i < 100; i++) {
-            int finalI = 100 * i;
-            Thread t1 = new Thread(() -> {
-                for (int j = 1; j < 101; j++) {
-                    synchronized (mutex) {
-                        set.add(finalI + j);
-                    }
-                }
-            });
-            t1.start();
+            new Task(list, latch).start();
         }
-        System.out.println(set.size());
+        latch.await();
+        System.out.println(" list size = " + list.size());
 
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            test();
+        }
+    }
+
+    public static class Task extends Thread {
+
+        private final List<Integer> list;
+
+        private final CountDownLatch latch;
+
+        public Task(List<Integer> list, CountDownLatch latch) {
+            this.latch = latch;
+            this.list = list;
+        }
+
+        @Override
+        public void run() {
+            for (int j = 0; j < 100; j++) {
+                list.add(j);
+            }
+            latch.countDown();
+        }
     }
 }
