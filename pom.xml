@@ -11,6 +11,7 @@
     <modules>
         <module>concurrent</module>
         <module>sso-springboot-app</module>
+        <module>utils</module>
     </modules>
 
     <properties>
