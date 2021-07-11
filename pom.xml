@@ -12,6 +12,7 @@
         <module>concurrent</module>
         <module>sso-springboot-app</module>
         <module>utils</module>
+        <module>second-kill</module>
     </modules>
 
     <properties>
