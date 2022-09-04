@@ -1,9 +1,10 @@
 package org.example.concurrent.collection;
 
-import com.google.common.cache.*;
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListenableFutureTask;
-import com.google.common.util.concurrent.ListeningExecutorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,7 +30,7 @@ public class LoadingCacheReferenceTest {
                 .expireAfterAccess(30, TimeUnit.MINUTES)
                 .refreshAfterWrite(1, TimeUnit.HOURS)
                 .softValues()
-                .removalListener(notification -> logger.info("Listener for key {} is removed! cause: {}", notification.getKey(), notification.getCause()))
+                .removalListener(notification -> logger.info("listener for key {} is removed! cause: {}", notification.getKey(), notification.getCause()))
                 .build(new CacheLoader<Object, Object>() {
                     @Override
                     public Object load(Object key) throws Exception {
