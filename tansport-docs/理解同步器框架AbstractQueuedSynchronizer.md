@@ -257,10 +257,72 @@ CLH 队列需要一个虚拟头节点。但是我们不会在构建时创建它�
      */
     private transient volatile Node head;
 
-    /**
-     * 等待队列的尾部，延迟初始化。仅通过方法 enq 修改以添加新的等待节点。
-     */
-    private transient volatile Node tail;
+  /**
+   * 等待队列的尾部，延迟初始化。仅通过方法 enq 修改以添加新的等待节点。
+   */
+  private transient volatile Node tail;
+
+  /**
+   * 设置以用于支持 compareAndSet. 我们需要在这里本地实现这一点：
+   * 为了允许未来的功能增强，我们不能显式地继承 AtomicInteger，不然这将是高效和有用的。
+   * 因此，作为少有的弊端，我们本地使用 hotspot 内在的 API 实现。但我们这样做的时候，
+   * 我们队其他 CASable 字段做同样的事情（否则可以用原子字段更新器来完成）。
+   */
+  private static final Unsafe unsafe = Unsafe.getUnsafe();
+  private static final long stateOffset;
+  private static final long headOffset;
+  private static final long tailOffset;
+  private static final long waitStatusOffset;
+  private static final long nextOffset;
+
+static {
+        try{
+        stateOffset=unsafe.objectFieldOffset
+        (AbstractQueuedSynchronizer.class.getDeclaredField("state"));
+        headOffset=unsafe.objectFieldOffset
+        (AbstractQueuedSynchronizer.class.getDeclaredField("head"));
+        tailOffset=unsafe.objectFieldOffset
+        (AbstractQueuedSynchronizer.class.getDeclaredField("tail"));
+        waitStatusOffset=unsafe.objectFieldOffset
+        (Node.class.getDeclaredField("waitStatus"));
+        nextOffset=unsafe.objectFieldOffset
+        (Node.class.getDeclaredField("next"));
+
+        }catch(Exception ex){throw new Error(ex);}
+        }
+
+/**
+ * CAS head field. Used only by enq.
+ */
+private final boolean compareAndSetHead(Node update){
+        return unsafe.compareAndSwapObject(this,headOffset,null,update);
+        }
+
+/**
+ * CAS tail field. Used only by enq.
+ */
+private final boolean compareAndSetTail(Node expect,Node update){
+        return unsafe.compareAndSwapObject(this,tailOffset,expect,update);
+        }
+
+/**
+ * CAS waitStatus field of a node.
+ */
+private static final boolean compareAndSetWaitStatus(Node node,
+        int expect,
+        int update){
+        return unsafe.compareAndSwapInt(node,waitStatusOffset,
+        expect,update);
+        }
+
+/**
+ * CAS next field of a node.
+ */
+private static final boolean compareAndSetNext(Node node,
+        Node expect,
+        Node update){
+        return unsafe.compareAndSwapObject(node,nextOffset,expect,update);
+        }
 
 ```
 
@@ -282,21 +344,37 @@ CLH 队列需要一个虚拟头节点。但是我们不会在构建时创建它�
 
 ### 3.3 阻塞
 
-在 JDK1.5 之前，线程的阻塞和唤醒只能依赖于 `Object` 类提供的 `wait()` 、`notify()`、`notifyAll()` 方法，它们都是由 JVM 提供实现，并且使用的时候需要获取监视器锁（即需要在 `synchronized` 代码块中），没有 Java API 可以阻塞和唤醒线程。唯一可以选择的是 `Thread.suspend` 和 `Thread.resume`，但是他们都有无法解决的竟态问题：当一个非阻塞线程在一个正准备阻塞的线程调用 `suspend` 之前调用 `resume`，`resume`操作将不起作用。
+在 JDK1.5 之前，线程的阻塞和唤醒只能依赖于 `Object` 类提供的 `wait()` 、`notify()`、`notifyAll()` 方法，它们都是由 JVM
+提供实现，并且使用的时候需要获取监视器锁（即需要在 `synchronized` 代码块中），没有 Java API
+可以阻塞和唤醒线程。唯一可以选择的是 `Thread.suspend` 和 `Thread.resume`
+，但是他们都有无法解决的竟态问题：当一个非阻塞线程在一个正准备阻塞的线程调用 `suspend` 之前调用 `resume`，`resume`操作将不起作用。
 
-`j.u.c` 包引入了 `LockSupport` 类，其底层是基于 `Unsafe` 类的 `park()` 和 `unpark()` 方法，`LockSupport.park` 阻塞当前线程，除非或直到发出 `LockSupport.unpark`（虚假唤醒是允许的）。`park` 方法同样支持可选的相对或绝对的超时设置，以及与 JVM 的 `Thread.interrupt` 结合 —— 可通过中断来 `unpark` 一个线程。
+`j.u.c` 包引入了 `LockSupport` 类，其底层是基于 `Unsafe` 类的 `park()` 和 `unpark()` 方法，`LockSupport.park`
+阻塞当前线程，除非或直到发出 `LockSupport.unpark`（虚假唤醒是允许的）。`park` 方法同样支持可选的相对或绝对的超时设置，以及与
+JVM 的 `Thread.interrupt` 结合 —— 可通过中断来 `unpark` 一个线程。
 
 ### 3.4 条件队列
 
-在 `AQS` 中除了同步队列外，还提供了另一种更为复杂的条件队列，而条件队列是基于 `Condition` 接口实现的，下面我们先浏览一下 `Condition` 接口的说明：
+在 `AQS` 中除了同步队列外，还提供了另一种更为复杂的条件队列，而条件队列是基于 `Condition`
+接口实现的，下面我们先浏览一下 `Condition` 接口的说明。
 
-`Condition` 将 `Object` 的监视器方法（`wait`、`notify` 和 `notifyAll`） 分解到不同的对象，通过将它们与任意的 `Lock` 实现相结合，可以使每个对象具有多个等待集合。`Lock` 代替的 `synchronized` 方法和语句的使用，`Condition` 代替了 `Object` 监视器方法的使用。
+#### 3.4.1 Condition 接口
 
-`Condition`（也称为 *条件队列(condition queue)* 或 *条件变量(condition variable)*）为线程提供了一种暂停执行（“等待”）的方法，直到另外一个线程通知说某个状态条件现在可能为 `true`。由于对这种共享状态信息的访问会发生在多个不同线程中，所以它必须受到保护，因此需要某种形式的锁与条件相关联。等待条件提供的关键属性是它以 *原子* 方式释放关联的锁并挂起当前线程，就像 `Object.wait` 一样。
+`Condition` 将 `Object` 的监视器方法（`wait`、`notify` 和 `notifyAll`） 分解到不同的对象，通过将它们与任意的 `Lock`
+实现相结合，可以使每个对象具有多个等待集合。`Lock` 代替的 `synchronized` 方法和语句的使用，`Condition` 代替了 `Object`
+监视器方法的使用。
+
+`Condition`（也称为 *条件队列(condition queue)* 或 *条件变量(condition variable)*
+）为线程提供了一种暂停执行（“等待”）的方法，直到另外一个线程通知说某个状态条件现在可能为 `true`
+。由于对这种共享状态信息的访问会发生在多个不同线程中，所以它必须受到保护，因此需要某种形式的锁与条件相关联。等待条件提供的关键属性是它以 *
+原子* 方式释放关联的锁并挂起当前线程，就像 `Object.wait` 一样。
 
 `Condition` 实例本质上是需要绑定到锁。需要获取特定 `Lock` 实例的 `Condition` 实例，请使用其 `newCondition()` 方法。
 
-例如，假设我们有一个支持 put 和 take 方法的有界缓冲区。如果 take 在空缓冲区上尝试获取，则线程将阻塞，知道缓冲区变得可用；如果在一个满的缓冲区上调用 `put`，则线程将阻塞，直到有空间可用。我们希望 put 线程继续等待，并且与 take 线程隔开在另一个等待集合中，以便当我们的缓冲区可用或有空间发生变化时通知对应的单个线程。这可以使用量 `Condition` 实例来实现。
+例如，假设我们有一个支持 put 和 take 方法的有界缓冲区。如果 take
+在空缓冲区上尝试获取，则线程将阻塞，知道缓冲区变得可用；如果在一个满的缓冲区上调用 `put`，则线程将阻塞，直到有空间可用。我们希望
+put 线程继续等待，并且与 take
+线程隔开在另一个等待集合中，以便当我们的缓冲区可用或有空间发生变化时通知对应的单个线程。这可以使用量 `Condition` 实例来实现。
 
 ```java
 class BoundedBuffer {
@@ -346,9 +424,11 @@ class BoundedBuffer {
 
 除非另有说明，否则为任何参数传递 `null` 值将导致 `NullPointerException`。
 
-实施注意事项：
+实现注意事项：
 
-在等待 `Condition ` 时，通常允许发生 *”虚假唤醒“*，作为对底层平台语义的让步。这对大多数应用程序几乎没有实际影响，因为应该始终在循环中等待 `Condition`，测试正在等待的状态谓词是否为 `true`。一个实现可以自由地消除虚假唤醒的可能性，但建议应用程序的程序员总是假设它们可以发生，因此总是在循环中等待条件唤醒。
+在等待 `Condition ` 时，通常允许发生 *”虚假唤醒“*
+，作为对底层平台语义的让步。这对大多数应用程序几乎没有实际影响，因为应该始终在循环中等待 `Condition`
+，测试正在等待的状态谓词是否为 `true`。一个实现可以自由地消除虚假唤醒的可能性，但建议应用程序的程序员总是假设它们可以发生，因此总是在循环中等待条件唤醒。
 
 条件等待的三种形式（可中断、不可中断和定时）在某些平台上实现的难易程度和性能特征可能不同。特别是，可能难以提供这些功能并维护特定的语义，例如排序保证。此外，中断线程的实际挂起能力可能并不总是适用所有平台。
 
@@ -361,313 +441,955 @@ class BoundedBuffer {
 ```java
 public interface Condition {
 
-    /**
-     * Causes the current thread to wait until it is signalled or
-     * {@linkplain Thread#interrupt interrupted}.
-     *
-     * <p>The lock associated with this {@code Condition} is atomically
-     * released and the current thread becomes disabled for thread scheduling
-     * purposes and lies dormant until <em>one</em> of four things happens:
-     * <ul>
-     * <li>Some other thread invokes the {@link #signal} method for this
-     * {@code Condition} and the current thread happens to be chosen as the
-     * thread to be awakened; or
-     * <li>Some other thread invokes the {@link #signalAll} method for this
-     * {@code Condition}; or
-     * <li>Some other thread {@linkplain Thread#interrupt interrupts} the
-     * current thread, and interruption of thread suspension is supported; or
-     * <li>A &quot;<em>spurious wakeup</em>&quot; occurs.
-     * </ul>
-     *
-     * <p>In all cases, before this method can return the current thread must
-     * re-acquire the lock associated with this condition. When the
-     * thread returns it is <em>guaranteed</em> to hold this lock.
-     *
-     * <p>If the current thread:
-     * <ul>
-     * <li>has its interrupted status set on entry to this method; or
-     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
-     * and interruption of thread suspension is supported,
-     * </ul>
-     * then {@link InterruptedException} is thrown and the current thread's
-     * interrupted status is cleared. It is not specified, in the first
-     * case, whether or not the test for interruption occurs before the lock
-     * is released.
-     *
-     * <p><b>Implementation Considerations</b>
-     *
-     * <p>The current thread is assumed to hold the lock associated with this
-     * {@code Condition} when this method is called.
-     * It is up to the implementation to determine if this is
-     * the case and if not, how to respond. Typically, an exception will be
-     * thrown (such as {@link IllegalMonitorStateException}) and the
-     * implementation must document that fact.
-     *
-     * <p>An implementation can favor responding to an interrupt over normal
-     * method return in response to a signal. In that case the implementation
-     * must ensure that the signal is redirected to another waiting thread, if
-     * there is one.
-     *
-     * @throws InterruptedException if the current thread is interrupted
-     *         (and interruption of thread suspension is supported)
-     */
-    void await() throws InterruptedException;
+  /**
+   * 使当前线程等待，直到它被 signal 或中断。
+   *
+   * 直到以下四种情况之一发生时，与此 Condition 关联的锁会被自动释放，并且当前线程
+   * 由于线程调度会被禁用并处于休眠状态：
+   * - 其他某个线程为此 Condition 调用了 signal() 方法，而当前线程恰好被选为要被唤醒的线程；
+   * - 其他一些线程为此 Condition 调用了 signalAll() 方法；
+   * - 其他一些线程中断当前线程，支持中断线程挂起；
+   * - 发生“虚假唤醒”。
+   *
+   * 在所有情况下，在此方法可以返回之前，当前线程必须重新获取获取与此 Condition 关联的锁。
+   * 当前线程返回时，它保证持有这个锁。
+   *
+   * 如果当前线程：
+   * - 在进入此方法时设置其中断状态；或者，
+   * - 等待过程中被中断，支持线程挂起的中断。
+   *
+   * 然后抛出 InterruptedException 并清除当前线程的中断状态。在第一种情况下，没有规定是否
+   * 在释放锁之前进行中断判断。
+   *
+   * 实现注意事项：
+   *
+   * 调用此方法时，假定当前线程持有与此 Condition 关联的锁。由实现决定是否是这种情况，
+   * 如果不是，如何响应。通常，将抛出异常（例如，IllegalMonitorStateException）并且
+   * 实现必须记录该事实。
+   *
+   * 与响应 signal 的正常方法返回相比，实现更倾向于响应中断。在这种情况下，实现必须确保将
+   * 信号量重定向到另一个等待线程（如果有的话）。
+   *
+   * @throws InterruptedException - 如果当前线程被中断（并且支持线程挂起的中断）
+   */
+  void await() throws InterruptedException;
 
-    /**
-     * Causes the current thread to wait until it is signalled.
-     *
-     * <p>The lock associated with this condition is atomically
-     * released and the current thread becomes disabled for thread scheduling
-     * purposes and lies dormant until <em>one</em> of three things happens:
-     * <ul>
-     * <li>Some other thread invokes the {@link #signal} method for this
-     * {@code Condition} and the current thread happens to be chosen as the
-     * thread to be awakened; or
-     * <li>Some other thread invokes the {@link #signalAll} method for this
-     * {@code Condition}; or
-     * <li>A &quot;<em>spurious wakeup</em>&quot; occurs.
-     * </ul>
-     *
-     * <p>In all cases, before this method can return the current thread must
-     * re-acquire the lock associated with this condition. When the
-     * thread returns it is <em>guaranteed</em> to hold this lock.
-     *
-     * <p>If the current thread's interrupted status is set when it enters
-     * this method, or it is {@linkplain Thread#interrupt interrupted}
-     * while waiting, it will continue to wait until signalled. When it finally
-     * returns from this method its interrupted status will still
-     * be set.
-     *
-     * <p><b>Implementation Considerations</b>
-     *
-     * <p>The current thread is assumed to hold the lock associated with this
-     * {@code Condition} when this method is called.
-     * It is up to the implementation to determine if this is
-     * the case and if not, how to respond. Typically, an exception will be
-     * thrown (such as {@link IllegalMonitorStateException}) and the
-     * implementation must document that fact.
-     */
-    void awaitUninterruptibly();
+  /**
+   * 使当前线程等待，直到它被 signal。
+   *
+   * 直到以下三种情况之一发生时，与此 Condition 关联的锁会被自动释放，并且当前线程
+   * 由于线程调度会被禁用并处于休眠状态：
+   * - 其他某个线程为此 Condition 调用了 signal() 方法，而当前线程恰好被选为要被唤醒的线程；
+   * - 其他一些线程为此 Condition 调用了 signalAll() 方法；
+   * - 发生“虚假唤醒”。
+   *
+   * 在所有情况下，在此方法可以返回之前，当前线程必须重新获取获取与此 Condition 关联的锁。
+   * 当前线程返回时，它保证持有这个锁。
+   *
+   * 如果当现场进入该方法时设置了中断状态，或者在等待过程中被中断，则继续等待直到被 signal 唤醒。
+   * 当它最终从这个方法返回时，它的中断状态会依旧存在。
+   *
+   *
+   * 实现注意事项：
+   *
+   * 调用此方法时，假定当前线程持有与此 Condition 关联的锁。由实现决定是否是这种情况，
+   * 如果不是，如何响应。通常，将抛出异常（例如，IllegalMonitorStateException）并且
+   * 实现必须记录该事实。
+   *
+   */
+  void awaitUninterruptibly();
 
-    /**
-     * Causes the current thread to wait until it is signalled or interrupted,
-     * or the specified waiting time elapses.
-     *
-     * <p>The lock associated with this condition is atomically
-     * released and the current thread becomes disabled for thread scheduling
-     * purposes and lies dormant until <em>one</em> of five things happens:
-     * <ul>
-     * <li>Some other thread invokes the {@link #signal} method for this
-     * {@code Condition} and the current thread happens to be chosen as the
-     * thread to be awakened; or
-     * <li>Some other thread invokes the {@link #signalAll} method for this
-     * {@code Condition}; or
-     * <li>Some other thread {@linkplain Thread#interrupt interrupts} the
-     * current thread, and interruption of thread suspension is supported; or
-     * <li>The specified waiting time elapses; or
-     * <li>A &quot;<em>spurious wakeup</em>&quot; occurs.
-     * </ul>
-     *
-     * <p>In all cases, before this method can return the current thread must
-     * re-acquire the lock associated with this condition. When the
-     * thread returns it is <em>guaranteed</em> to hold this lock.
-     *
-     * <p>If the current thread:
-     * <ul>
-     * <li>has its interrupted status set on entry to this method; or
-     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
-     * and interruption of thread suspension is supported,
-     * </ul>
-     * then {@link InterruptedException} is thrown and the current thread's
-     * interrupted status is cleared. It is not specified, in the first
-     * case, whether or not the test for interruption occurs before the lock
-     * is released.
-     *
-     * <p>The method returns an estimate of the number of nanoseconds
-     * remaining to wait given the supplied {@code nanosTimeout}
-     * value upon return, or a value less than or equal to zero if it
-     * timed out. This value can be used to determine whether and how
-     * long to re-wait in cases where the wait returns but an awaited
-     * condition still does not hold. Typical uses of this method take
-     * the following form:
-     *
-     *  <pre> {@code
-     * boolean aMethod(long timeout, TimeUnit unit) {
-     *   long nanos = unit.toNanos(timeout);
-     *   lock.lock();
-     *   try {
-     *     while (!conditionBeingWaitedFor()) {
-     *       if (nanos <= 0L)
-     *         return false;
-     *       nanos = theCondition.awaitNanos(nanos);
-     *     }
-     *     // ...
-     *   } finally {
-     *     lock.unlock();
-     *   }
-     * }}</pre>
-     *
-     * <p>Design note: This method requires a nanosecond argument so
-     * as to avoid truncation errors in reporting remaining times.
-     * Such precision loss would make it difficult for programmers to
-     * ensure that total waiting times are not systematically shorter
-     * than specified when re-waits occur.
-     *
-     * <p><b>Implementation Considerations</b>
-     *
-     * <p>The current thread is assumed to hold the lock associated with this
-     * {@code Condition} when this method is called.
-     * It is up to the implementation to determine if this is
-     * the case and if not, how to respond. Typically, an exception will be
-     * thrown (such as {@link IllegalMonitorStateException}) and the
-     * implementation must document that fact.
-     *
-     * <p>An implementation can favor responding to an interrupt over normal
-     * method return in response to a signal, or over indicating the elapse
-     * of the specified waiting time. In either case the implementation
-     * must ensure that the signal is redirected to another waiting thread, if
-     * there is one.
-     *
-     * @param nanosTimeout the maximum time to wait, in nanoseconds
-     * @return an estimate of the {@code nanosTimeout} value minus
-     *         the time spent waiting upon return from this method.
-     *         A positive value may be used as the argument to a
-     *         subsequent call to this method to finish waiting out
-     *         the desired time.  A value less than or equal to zero
-     *         indicates that no time remains.
-     * @throws InterruptedException if the current thread is interrupted
-     *         (and interruption of thread suspension is supported)
-     */
-    long awaitNanos(long nanosTimeout) throws InterruptedException;
+  /**
+   * 使当前线程等待，直到它被 signal 或 中断，或者达到指定的等待时间。
+   *
+   * 直到以下五种情况之一发生时，与此 Condition 关联的锁会被自动释放，并且当前线程
+   * 由于线程调度会被禁用并处于休眠状态：
+   * - 其他某个线程为此 Condition 调用了 signal() 方法，而当前线程恰好被选为要被唤醒的线程；
+   * - 其他一些线程为此 Condition 调用了 signalAll() 方法；
+   * - 其他一些线程中断当前线程，支持中断线程挂起；
+   * - 到达指定的等待时间；
+   * - 发生“虚假唤醒”。
+   *
+   * 在所有情况下，在此方法可以返回之前，当前线程必须重新获取获取与此 Condition 关联的锁。
+   * 当前线程返回时，它保证持有这个锁。
+   *
+   * 如果当前线程：
+   * - 在进入此方法时设置其中断状态；或者，
+   * - 等待过程中被中断，支持线程挂起的中断。
+   *
+   * 然后抛出 InterruptedException 并清除当前线程的中断状态。在第一种情况下，没有规定是否
+   * 在释放锁之前进行中断判断。
+   *
+   * 在返回时提供给定的 nanosTimeout 值，该方法返回对剩余等待纳秒数的预估，如果超时，则返回
+   * 小于或等于零的值。在等待返回但是等待的条件仍不成立的情况下，此值可用于确定是否重新等待以及
+   * 重新等待多长时间。此方法的典型用途如以下形式：
+   *
+   * boolean aMethod(long timeout, TimeUnit unit) {
+   *     long nanos = unit.toNanos(timeout);
+   *     lock.lock();
+   *     try {
+   *         while (!conditionBeingWaitedFor()) {
+   *             if (nanos <= 0L) 
+   *                 return false;
+   *             nanos = theCondition.awaitNanos(nanos);
+   *         }
+   *         // ...
+   *     } finally {
+   *         lock.unlock();
+   *     }
+   * }
+   *
+   * 设计说明：此方法需要纳秒参数，以避免报告剩余时间时出现截断错误。这种精度损失将使程序员
+   * 难以确保总等待时间不会系统地短于重新等待发生时指定的时间。
+   *
+   * 实现注意事项：
+   *
+   * 调用此方法时，假定当前线程持有与此 Condition 关联的锁。由实现决定是否是这种情况，
+   * 如果不是，如何响应。通常，将抛出异常（例如，IllegalMonitorStateException）并且
+   * 实现必须记录该事实。
+   *
+   * 与响应 signal 的正常方法返回相比，实现更倾向于响应中断。在这种情况下，实现必须确保将
+   * 信号量重定向到另一个等待线程（如果有的话）。
+   *
+   * 参数： nanosTimeout - 等待的最长时间，以纳秒为单位。
+   * 返回： nanosTimeout值减去从该方法返回时等待的时间的估计值。正值表示可以用作对该方法的
+   *       后续调用以完成等待所需时间的参数。小于或等于零表示没有剩余的时间。
+   * @throws InterruptedException - 如果当前线程被中断（并且支持线程挂起的中断）
+   */
+  long awaitNanos(long nanosTimeout) throws InterruptedException;
 
-    /**
-     * Causes the current thread to wait until it is signalled or interrupted,
-     * or the specified waiting time elapses. This method is behaviorally
-     * equivalent to:
-     *  <pre> {@code awaitNanos(unit.toNanos(time)) > 0}</pre>
-     *
-     * @param time the maximum time to wait
-     * @param unit the time unit of the {@code time} argument
-     * @return {@code false} if the waiting time detectably elapsed
-     *         before return from the method, else {@code true}
-     * @throws InterruptedException if the current thread is interrupted
-     *         (and interruption of thread suspension is supported)
-     */
-    boolean await(long time, TimeUnit unit) throws InterruptedException;
+  /**
+   * 使当前线程等待，直到它被 signal 或 中断，或者达到指定的等待时间。此方法在行为上等效于：
+   *     awaitNanos(unit.toNanos(time)) > 0 
+   *
+   * 参数： time - 等待的最长时间
+   *       unit - time 参数的时间单位
+   * 返回： 如果从方法返回之前已经到达指定时间，则为 false，否则为 true。
+   * @throws InterruptedException - 如果当前线程被中断（并且支持线程挂起的中断）
+   */
+  boolean await(long time, TimeUnit unit) throws InterruptedException;
 
-    /**
-     * Causes the current thread to wait until it is signalled or interrupted,
-     * or the specified deadline elapses.
-     *
-     * <p>The lock associated with this condition is atomically
-     * released and the current thread becomes disabled for thread scheduling
-     * purposes and lies dormant until <em>one</em> of five things happens:
-     * <ul>
-     * <li>Some other thread invokes the {@link #signal} method for this
-     * {@code Condition} and the current thread happens to be chosen as the
-     * thread to be awakened; or
-     * <li>Some other thread invokes the {@link #signalAll} method for this
-     * {@code Condition}; or
-     * <li>Some other thread {@linkplain Thread#interrupt interrupts} the
-     * current thread, and interruption of thread suspension is supported; or
-     * <li>The specified deadline elapses; or
-     * <li>A &quot;<em>spurious wakeup</em>&quot; occurs.
-     * </ul>
-     *
-     * <p>In all cases, before this method can return the current thread must
-     * re-acquire the lock associated with this condition. When the
-     * thread returns it is <em>guaranteed</em> to hold this lock.
-     *
-     *
-     * <p>If the current thread:
-     * <ul>
-     * <li>has its interrupted status set on entry to this method; or
-     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
-     * and interruption of thread suspension is supported,
-     * </ul>
-     * then {@link InterruptedException} is thrown and the current thread's
-     * interrupted status is cleared. It is not specified, in the first
-     * case, whether or not the test for interruption occurs before the lock
-     * is released.
-     *
-     *
-     * <p>The return value indicates whether the deadline has elapsed,
-     * which can be used as follows:
-     *  <pre> {@code
-     * boolean aMethod(Date deadline) {
-     *   boolean stillWaiting = true;
-     *   lock.lock();
-     *   try {
-     *     while (!conditionBeingWaitedFor()) {
-     *       if (!stillWaiting)
-     *         return false;
-     *       stillWaiting = theCondition.awaitUntil(deadline);
-     *     }
-     *     // ...
-     *   } finally {
-     *     lock.unlock();
-     *   }
-     * }}</pre>
-     *
-     * <p><b>Implementation Considerations</b>
-     *
-     * <p>The current thread is assumed to hold the lock associated with this
-     * {@code Condition} when this method is called.
-     * It is up to the implementation to determine if this is
-     * the case and if not, how to respond. Typically, an exception will be
-     * thrown (such as {@link IllegalMonitorStateException}) and the
-     * implementation must document that fact.
-     *
-     * <p>An implementation can favor responding to an interrupt over normal
-     * method return in response to a signal, or over indicating the passing
-     * of the specified deadline. In either case the implementation
-     * must ensure that the signal is redirected to another waiting thread, if
-     * there is one.
-     *
-     * @param deadline the absolute time to wait until
-     * @return {@code false} if the deadline has elapsed upon return, else
-     *         {@code true}
-     * @throws InterruptedException if the current thread is interrupted
-     *         (and interruption of thread suspension is supported)
-     */
-    boolean awaitUntil(Date deadline) throws InterruptedException;
+  /**
+   * 使当前线程等待，直到它被 signal 或 中断，或者达到指定的等待时间。
+   *
+   * 直到以下五种情况之一发生时，与此 Condition 关联的锁会被自动释放，并且当前线程
+   * 由于线程调度会被禁用并处于休眠状态：
+   * - 其他某个线程为此 Condition 调用了 signal() 方法，而当前线程恰好被选为要被唤醒的线程；
+   * - 其他一些线程为此 Condition 调用了 signalAll() 方法；
+   * - 其他一些线程中断当前线程，支持中断线程挂起；
+   * - 到达指定的等待时间；
+   * - 发生“虚假唤醒”。
+   *
+   * 在所有情况下，在此方法可以返回之前，当前线程必须重新获取获取与此 Condition 关联的锁。
+   * 当前线程返回时，它保证持有这个锁。
+   *
+   * 如果当前线程：
+   * - 在进入此方法时设置其中断状态；或者，
+   * - 等待过程中被中断，支持线程挂起的中断。
+   *
+   * 然后抛出 InterruptedException 并清除当前线程的中断状态。在第一种情况下，没有规定是否
+   * 在释放锁之前进行中断判断。
+   *
+   * 返回值表示是否已经过了 deadline，可以如下使用：
+   *
+   * 实现注意事项：
+   *
+   * 调用此方法时，假定当前线程持有与此 Condition 关联的锁。由实现决定是否是这种情况，
+   * 如果不是，如何响应。通常，将抛出异常（例如，IllegalMonitorStateException）并且
+   * 实现必须记录该事实。
+   *
+   * 与响应 signal 的正常方法返回相比，实现更倾向于响应中断。在这种情况下，实现必须确保将
+   * 信号量重定向到另一个等待线程（如果有的话）。
+   * boolean aMethod(Date deadline) {
+   *     boolean stillWaiting = true;
+   *     lock.lock();
+   *     try {
+   *         while(!conditionBeingWaitedFor()) {
+   *             if (!stillWaiting)
+   *                 return false;
+   *             stillWaiting = theCondition.awaitUntill(deadline);
+   *         }
+   *         // ...
+   *     } finally {
+   *         lock.unlock();
+   *     }
+   * }
+   *
+   * 参数： deadline - 等待的绝对时间。
+   * 返回： 如果返回时已经超过最后期限，则为 false，否则为 true。
+   * @throws InterruptedException - 如果当前线程被中断（并且支持线程挂起的中断）
+   */
+  boolean awaitUntil(Date deadline) throws InterruptedException;
 
-    /**
-     * Wakes up one waiting thread.
-     *
-     * <p>If any threads are waiting on this condition then one
-     * is selected for waking up. That thread must then re-acquire the
-     * lock before returning from {@code await}.
-     *
-     * <p><b>Implementation Considerations</b>
-     *
-     * <p>An implementation may (and typically does) require that the
-     * current thread hold the lock associated with this {@code
-     * Condition} when this method is called. Implementations must
-     * document this precondition and any actions taken if the lock is
-     * not held. Typically, an exception such as {@link
-     * IllegalMonitorStateException} will be thrown.
-     */
-    void signal();
+  /**
+   * 唤醒一个等待线程。
+   *
+   * 如果有任何线程在此 Condition 下等待，则选择一个用于唤醒。然后，该线程必须在从
+   * await 返回之前重新获取锁。
+   *
+   * 实现注意事项
+   *
+   * 在调用此方法时，实现可能（并且通常确实）要求当前线程持有与此 Condition 关联的锁。
+   * 实现必须记录此前提条件以及未持有锁时采取的任何操作。通常，会抛出 IllegalMonitorStateException。
+   */
+  void signal();
 
-    /**
-     * Wakes up all waiting threads.
-     *
-     * <p>If any threads are waiting on this condition then they are
-     * all woken up. Each thread must re-acquire the lock before it can
-     * return from {@code await}.
-     *
-     * <p><b>Implementation Considerations</b>
-     *
-     * <p>An implementation may (and typically does) require that the
-     * current thread hold the lock associated with this {@code
-     * Condition} when this method is called. Implementations must
-     * document this precondition and any actions taken if the lock is
-     * not held. Typically, an exception such as {@link
-     * IllegalMonitorStateException} will be thrown.
-     */
-    void signalAll();
+  /**
+   * 唤醒所有等待线程。
+   *
+   * 如果有任何线程在此 Condition 下等待，则它们全部都会被唤醒。然后，每个线程必须在从
+   * await 返回之前重新获取锁。
+   *
+   * 实现注意事项
+   *
+   * 在调用此方法时，实现可能（并且通常确实）要求当前线程持有与此 Condition 关联的锁。
+   * 实现必须记录此前提条件以及未持有锁时采取的任何操作。通常，会抛出 IllegalMonitorStateException。
+   */
+  void signalAll();
 }
 
 ```
+
+`Condition` 接口提供了与 JAVA 原生的监视器相同风格的 API，但是其并不依赖于 JVM 的实现，用户可以自定义实现 `Condition`
+接口，提供更加强大和更加灵活的功能，`Condition` 在说明中建议和 `Lock`
+共同使用，可以使每个对象具有多个等待集合，我们下面了解一下 `Lock` 接口 。
+
+#### 3.4.2 Lock 接口
+
+与使用 `synchronized` 方法和语句相比，`Lock`
+实现提供了更广泛的锁定操作。它们允许更灵活的结构，可能具有完全不同的属性，并且可能支持多个关联的 `Condition` 对象。
+
+`Lock` 是一种控制多线程访问共享资源的工具。通常，`Lock`
+提供对共享资源的独占访问：一次只有一个线程可以获得锁，并且堆共享资源的所有访问都需要首先获取锁。但是，某些锁可能允许并发访问共享资源，例如 `ReadWriteLock`
+的读锁。
+
+`synchronized` 方法或语句的使用提供了对于每个对象关键的隐式监视器锁的访问，但强制所有锁的获取和释放必须在块结构内发生：当获取多个锁时，它们必须以相反的顺序释放，并且所有锁必须在获得它们的相同词法范围内释放。
+
+虽然 `synchronized`
+方法和语句的作用域机制让使用监视器锁编程变得更加容易，并且有助于避免许多设计锁的常见编程错误，但在某些情况下，您需要以更加灵活的方式使用锁。例如，一些遍历并发访问的数据结构的算法需要使用 `hand-over-hand`
+或 `chain locking`：你获取节点 A 的锁，然后获取节点 B 的锁，然后释放 A 并获取 C，然后释放 B 并获取 D 等等。`Lock`
+接口的实现通过允许在不同范围内获取和释放锁以及允许以任意顺序获取和释放多个锁，来启用此类技术。
+
+随着这种灵活性的增加，额外的责任也随之而来。块结构锁定的缺失消除了 `synchronized` 方法和语句发生的锁定和自动释放。在大多数情况下，应使用以下语句：
+
+```java
+Lock l=...;
+        l.lock();
+        try{
+        // access the resource protected by this lock
+        }finally{
+        l.unlock;
+        }
+```
+
+当锁定和解锁发生在不同范围内时，必须注意确保所有在持有锁时执行的代码都受到 `try-finally` 或 `try-catch` 的保护，以确保在必要时释放锁。
+
+`Lock` 实现通过提供非阻塞获取锁定方式（`tryLock()`）、获取可中断锁的尝试（`lockInterruptibly()`
+，以及获取锁的尝试）、还提供了超过使用 `synchronized` 方法和语句的附加功能 —— 可以超时（`tryLock(long, Timeunit)`）。
+
+`Lock` 类还可以提供与隐式监视器锁完全不同的行为和语义，例如保证排序、不可重入使用或死锁检测。如果实现提供了这种专门的语义，那么实现必须用文档记录这些语义。
+
+请注意，`Lock` 实例只是普通对象，它们本身可以用作 `synchronized` 语句中的目标。获取 `Lock`
+实例的监视器锁与调用该实例的任何 `lock() `
+方法没有指定关系。建议为避免混淆，除非在它们自己的实现中，否则不要以这种方式使用 `Lock` 实例。
+
+除非另有说明，否则任何参数传递 `null` 将导致 `NullPointerException`。
+
+**内存同步**：
+
+所有 `Lock` 实现*必须*
+强制执行与内置监视器锁提供的相同的内存同步语义。如 [《The Java Language Specification (17.4 Memory Model) 》](https://docs.oracle.com/javase/specs/jls/se7/html/jls-17.html#jls-17.4)
+中所述：
+
+- 成功的 *Lock* 动作与成功的 `lock()` 操作具有相同的内存同步效果。
+- 成功的 *Unlock* 动作与成功的 `unlock()` 操作具有相同的内存同步效果。
+
+不成功的 lock 和 unlock 操作，以及重入 lock/unlock 操作，不需要任何内存同步效果。
+
+**实现注意事项**：
+
+三种形式的锁获取（可中断、不可中断和超时）可能在它们的性能特征、顺序保证或其他实现质量方面有所不同。此外，中断 *正在进行*
+的锁获取的能力在给定的 `Lock`
+类中可能不可用。因此，实现不需要为所有的三种形式的锁获取给定完全相同的保证或语义，也不需要支持正在进行的锁获取的中断。实现需要清楚地记录每个锁定方法提供的语义和保证。它们必须遵守此接口中定义的中断语义，一直吃获取锁的中断：完全或仅在方法入口上。
+
+由于中断通常意味着取消，并且对中断的检查通常不常见，因此实现可以倾向于响应中断而不是正常的方法返回。即使可以证明在另一个操作可能已解除阻塞线程之后发生中断也是如此。实现应该用文档记录这个行为。
+
+```java
+public interface Lock {
+
+  /**
+   * 获取锁。
+   *
+   * 如果锁不可用，则当前线程处于线程调度的目的，将被禁用并处于休眠状态，直到获得锁为止。
+   *
+   * 实现注意事项
+   *
+   * Lock 实现可能能够检测到锁的错误使用，例如会导致死锁的调用，并且在这种情况下可能会抛出
+   * （未经检查）的异常。该 Lock 实现必须描述和记录情况以及异常类型。
+   */
+  void lock();
+
+  /**
+   * 除非当前线程被中断，否则获取锁。
+   *
+   * 如果可用，则获取锁并立即返回。
+   *
+   * 如果锁不可用，则当前线程处于线程调度的目的，将被禁用并处于休眠状态，直到发生以下两种情况之一：
+   * - 锁被当前线程获取；
+   * - 其他一些线程中断当前线程，当前线程支持获取锁的中断。
+   *
+   * 如果当前线程：
+   * - 在进入此方法时设置其中断状态；
+   * - 获取锁时中断，并支持获取锁中断。
+   *
+   * 然后会抛出 InterruptedException 并清除当前线程的中断状态。
+   *
+   *
+   * 实现注意事项
+   *
+   * 在某些实现中中断锁获取的能力可能是无法实现的，并且如果可能的话会是一个非常昂贵的操作。
+   * 程序员应该意识到可能是这种情况，并详细记录和描述这种情况。。
+   *
+   * 与正常方法返回相比，实现更倾向于响应中断。
+   *
+   * Lock 实现可能能够检测到锁的错误使用，例如会导致死锁的调用，并且在这种情况下可能会抛出
+   * （未经检查的）异常。该 Lock 实现必须详细记录情况和异常类型。
+   *
+   * @throws InterruptedException - 如果当前线程在获取锁时被中断（并且支持获取锁的中断）
+   */
+  void lockInterruptibly() throws InterruptedException;
+
+  /**
+   * 仅当调用时是空闲的，才获取到锁。
+   *
+   * 如果锁可用，则获取锁并立即返回 true。如果锁不可用，则此方法立即返回 false。
+   *
+   * 该方法的典型用法是：
+   *
+   * Lock lock = ...;
+   * if (lock.tryLock()) {
+   *     try {
+   *         // manipulate protected state
+   *     } finally {
+   *         lock.unlock();
+   *     }
+   * } else {
+   *     // perform alternative actions
+   * }
+   *
+   * 这种方法确保锁在获得的情况下才解锁，并且在未获得的时候不进行解锁操作。
+   *
+   * 返回： 如果获得了锁返回 true，否则为 false。
+   */
+  boolean tryLock();
+
+  /**
+   * 如果在给定的等待时间内锁空闲并且当前线程没有被中断，则获取锁。
+   *
+   * 如果锁可用，则获取锁并立即返回 true。如果锁不可用，则当前线程处于线程调度的目的，
+   * 将被禁用并处于休眠状态，直到发生以下三种情况之一：
+   * - 锁被当前线程获取；
+   * - 其他一些线程中断当前线程，当前线程支持获取锁的中断；
+   * - 指定的等待时间已过。
+   *
+   * 如果获得锁，则返回 true。
+   *
+   * 如果当前线程：
+   * - 在进入此方法时设置其为中断状态；或
+   * - 获取锁时中断，并支持获取锁中断。
+   *
+   * 然后会抛出 InterruptedException 并清除当前线程的中断状态。
+   *
+   * 如果经过了指定的等待时间，则返回 false。如果时间小于或等于 0，则该方法不会等待。
+   *
+   * 实现注意事项
+   *
+   * 在某些实现中中断锁获取的能力可能是无法实现的，并且如果可能的话会是一个非常昂贵的操作。
+   * 程序员应该意识到可能是这种情况，并详细记录和描述这种情况。。
+   *
+   * 与正常方法返回相比，实现更倾向于响应中断。
+   *
+   * Lock 实现可能能够检测到锁的错误使用，例如会导致死锁的调用，并且在这种情况下可能会抛出
+   * （未经检查的）异常。该 Lock 实现必须详细记录情况和异常类型。
+   *
+   * 参数： time - 等待锁的最长时间
+   *       unit - time 参数的时间单位
+   * 返回： 如果获得了锁，返回 true；如果在获得锁之前超过了等待时间，返回 false
+   * @throws InterruptedException - 如果当前线程在获取锁时被中断（并且支持获取锁的中断）
+   */
+  boolean tryLock(long time, TimeUnit unit) throws InterruptedException;
+
+  /**
+   * 释放锁。
+   *
+   * 实现注意事项
+   *
+   * Lock 实现通常会对哪个线程可以释放锁施加限制（通常只有锁的持有者可以释放它），
+   * 并且如果违反限制可能会抛出（未经检查的）异常。该 Lock 实现必须详细记录情况和异常类型。
+   */
+  void unlock();
+
+  /**
+   * 返回绑定到此 Lock 实例的新 Condition 实例。
+   *
+   * 在等待条件之前，锁必须由当前线程持有。调用 Condition.await() 将在等待之前自动释放
+   * 锁，并在等待返回之前重新获取锁。
+   *
+   * 实现注意事项
+   *
+   * Condition 实例的确切操作取决于 Lock 实现，并且必须由该实现描述。
+   *
+   *
+   * 返回：此 Lock 实例的新 Condition 实例
+   * @throws UnsupportedOperationException - 如果 Lock 实现不支持 Condition
+   */
+  Condition newCondition();
+}
+```
+
+#### 3.4.3 AQS 中的 ConditionObject
+
+在 `AQS` 内部也存在这 `Condition` 接口的实现类，即 `ConditionObject`，它是 `AQS`的共有内部类，并且它是 `Lock`
+实现的基础。`ConditionObject` 提供的条件队列的入队的方法如下：
+
+```java
+public class ConditionObject implements Condition, java.io.Serializable {
+  private static final long serialVersionUID = 1173984872572414699L;
+  /** 条件队列的第一个节点 */
+  private transient Node firstWaiter;
+  /** 条件队列的最后一个节点 */
+  private transient Node lastWaiter;
+
+  /**
+   * Creates a new {@code ConditionObject} instance.
+   */
+  public ConditionObject() {
+  }
+
+  // 内部方法
+
+  /**
+   * 为等待队列添加一个新的等待节点
+   * @return 新的等待节点
+   */
+  private Node addConditionWaiter() {
+    // 本地变量保存 lastWaiter
+    Node t = lastWaiter;
+    // 如果 lastWaiter 不为条件等待状态，则说明 lastWaiter 是取消状态，清理
+    if (t != null && t.waitStatus != Node.CONDITION) {
+      // 解除所有取消的等待节点的连接
+      unlinkCancelledWaiters();
+      t = lastWaiter;
+    }
+    // 创建当前线程的新节点，类型为 CONDITION
+    Node node = new Node(Thread.currentThread(), Node.CONDITION);
+    // 在首次创建 Condition 时，lastWaiter 为 null，则把当前节点设置为 firstWaiter 
+    if (t == null)
+      firstWaiter = node;
+    else
+      // lastWaiter 不为空，则连接新节点
+      t.nextWaiter = node;
+    // 当前新增节点为 lastWaiter
+    lastWaiter = node;
+    return node;
+  }
+
+  /**
+   * 从条件队列中取消连接已取消的等待节点。仅在持有锁时调用。当前方法会在条件等待期间
+   * 发生取消时被调用，并且在 lastWaiter 已被取消时插入新的等待节点时调用。需要这种
+   * 方法来避免在没有 signal 的情况下保留垃圾。因此，即使它可能需要完全遍历，它也只有
+   * 在没有被 signal 的情况下发生超时或取消时才发挥作用。它遍历所有节点，而不是在特定
+   * 目标处停止以取消连接到垃圾节点的所有指针，因此不会在取消风暴期间进行多次重新遍历。
+   *
+   * 简单来说，此方法就是更新队列，移除所有 CANCELLED 的节点，期间会 firstWaiter 和
+   * lastWaiter 的引用
+   */
+  private void unlinkCancelledWaiters() {
+    // 保存当前的 firstWaiter 
+    Node t = firstWaiter;
+    // 跟踪节点，用于最后找到 lastWaiter
+    Node trail = null;
+    while (t != null) {
+      // 从 firstWaiter 开始往后遍历
+      Node next = t.nextWaiter;
+      // 当前节点不是 CONDITION，那么就是 CANCELLED
+      if (t.waitStatus != Node.CONDITION) {
+        // 取消当前节点的引用
+        t.nextWaiter = null;
+        // trail 为空，说明当前还未遇到第一个 CONDITION 状态的节点
+        if (trail == null)
+          // 将 firstWaiter 暂时设置为 下个节点
+          firstWaiter = next;
+        else
+          // 将 next 链接到追踪节点
+          trail.nextWaiter = next;
+        // 遍历结束
+        if (next == null)
+          // lastWaiter 即 trail 的最后一个节点
+          lastWaiter = trail;
+      } else
+        // CONDITION 节点，记录当前节点
+        trail = t;
+      // 更新当前节点为 next
+      t = next;
+    }
+  }
+
+  // 公共方法
+
+  /**
+   * 将等待时间最长的线程（如果存在）从该条件队列转换到拥有锁的等待队列。
+   *
+   * @throws IllegalMonitorStateException 如果 isHeldExclusively 返回 false
+   */
+  public final void signal() {
+    // 当前同步器持有的线程是否是当前线程
+    if (!isHeldExclusively())
+      throw new IllegalMonitorStateException();
+    // 等待时间最长的就是第一个入队的 fistWaiter
+    Node first = firstWaiter;
+    if (first != null)
+      // 唤醒节点
+      doSignal(first);
+  }
+
+  /**
+   * 将所有线程从该条件等待队列转换到拥有锁的等待队列。
+   *
+   * @throws IllegalMonitorStateException 如果 isHeldExclusively 返回 false
+   */
+  public final void signalAll() {
+    // // 当前同步器持有的线程是否是当前线程
+    if (!isHeldExclusively())
+      throw new IllegalMonitorStateException();
+    Node first = firstWaiter;
+    if (first != null)
+      // 唤醒所有节点
+      doSignalAll(first);
+  }
+
+  /**
+   * 实现非中断的条件等待。
+   *
+   * 1. 保存 getStatus() 返回的锁定状态。
+   * 2. 使用保存的状态作为参数调用 release()，如果失败抛出 IllegalMonitorStateException。
+   * 3. 阻塞直到 signal。
+   * 4. 将保存的状态作为参数调用特定版本的 acquire() 来重新获取锁。
+   */
+  public final void awaitUninterruptibly() {
+    // 添加新的等待节点
+    Node node = addConditionWaiter();
+    // release 当前 AQS 的所有资源，并返回资源的 state
+    int savedState = fullyRelease(node);
+    // 是否中断
+    boolean interrupted = false;
+    // 判断当前节点是否是同步队列节点，理论上新增的应当是不在同步队列，当被唤醒时，如果加锁成功则会在同步队列
+    while (!isOnSyncQueue(node)) {
+      // 阻塞当前节点
+      LockSupport.park(this);
+      // 判断当前线程是否中断
+      if (Thread.interrupted())
+        interrupted = true;
+    }
+    // 如果当前线程被中断，或在加锁过程中中断，则对当前线程进行中断操作
+    if (acquireQueued(node, savedState) || interrupted)
+      selfInterrupt();
+  }
+
+  /**
+   * 删除并转换节点，直到命中未取消的节点或 null。从 signal 中分离出来部分是为了
+   * 编译器内联没有等待节点的情况。
+   *
+   * @param first (非空) 条件队列中的第一个节点
+   */
+  private void doSignal(Node first) {
+    do {
+      // 第一个节点的 nextWaiter 为空，说明目前只有一个等待节点
+      if ((firstWaiter = first.nextWaiter) == null)
+        lastWaiter = null;
+      // 将当前处理节点从条件队列移除
+      first.nextWaiter = null;
+      // 转换当前节点
+    } while (!transferForSignal(first) &&
+            // 转换失败，此时的 firstWaiter 是 first 的 nextWaiter 节点
+            (first = firstWaiter) != null);
+  }
+
+  /**
+   * 移除并转换所有节点
+   * @param first (非空) 条件队列中的第一个节点
+   */
+  private void doSignalAll(Node first) {
+    // 全部转换，则将 lastWaiter 和 firstWaiter 置空
+    lastWaiter = firstWaiter = null;
+    do {
+      // 获取下一个等待节点
+      Node next = first.nextWaiter;
+      // 下一个等待节点移除
+      first.nextWaiter = null;
+      // 处理当前节点
+      transferForSignal(first);
+      // 更新下个节点为处理节点
+      first = next;
+    } while (first != null);
+  }
+  // 暂时不展示其他方法
+}
+```
+
+我们在观察 `ConditionObject` 类后可以发现，所有的 `await` 方法及其变体都会调用 `addConditionWaiter()`
+方法，将阻塞线程添加到添加队列中。我们下面演示一下条件队列入队的情况下，假设存在两个线程 `thread-1` 和 `thread-2`
+需要阻塞入队，首先是 `thread-1` 入队：
+
+![thread-1-enq](/Users/wenbo.zhang/Desktop/images/condition-queue-thread-1-enq.png)
+
+在 `thread-1` 入队后等待过程中，`thread-2` 入队：
+
+![thread-2-enq](/Users/wenbo.zhang/Desktop/images/condition-queue-thread-2-enq.png)
+
+之后线程入队就如上面操作一样，只需修改 lastWaiter 和 nextWaiter 指向新节点即可，其基本原理暂时介绍到这里，后面我们会根据源码详细介绍。
+
+### 四、AQS 的独占与共享
+
+在 `AQS` 的设计中，为我们保留的扩展的能力，我们可以使用 `ConditionObject` 和 `AQS`
+去实现共享资源的独占和共享，就和 `ReadWriteLock` 一样，下面我们根据 `AQS` 的源码来解析这两种模式是如何实现的。
+
+#### 4.1 独占模式
+
+独占模式：意味着同一时刻，共享资源只有唯一的单个节点可以获取访问，此时获取到锁的节点的线程是独享的，获取到锁的线程也就从阻塞状态可以继续运行，而同步队列的其他节点则需要继续阻塞。
+
+独占模式的实现主要由 `AQS` 在初始化时， `status` 值来确定允许申请资源的数量上限，而对共享资源的获取和释放主要由以下方法进行操作：
+
+- `acquire(int)` ：获取 int 数量的资源，也就是原子修改 `status`。
+- `acquireInterruptibly(int)`：获取 int 数量的资源，可以响应线程中断。
+- `tryAcquireNanos(int, long)` ：在指定 long 时间内，获取 int 数量的资源。
+- `release(int)` ：释放 int 数量的资源。
+
+##### 4.1.1 acquire
+
+下面我们根据源码，了解一下独占模式是如何运行的，首先是 `acquire`：
+
+```java
+/**
+ * 以独占模式获取锁，忽略中断。  通过调用至少一次 tryAcquire() 方法来实现，成功就返回。
+ * 否则线程排队，调用 tryAcquire() 成功之前，可能重复阻塞和解除阻塞。此方法可用于实现
+ * Lock.lock()。
+ *
+ * 参数：arg - acquire 参数。这个值被传递给 tryAcquire，你可以用此代表你喜欢的任何东西。
+ */
+public final void acquire(int arg){
+        // 只有当加锁成功或以独占类型节点入队（同步队列，非条件队列）成功时返回，
+        if(!tryAcquire(arg)&&
+        // 加锁失败，则进行入队操作
+        acquireQueued(addWaiter(Node.EXCLUSIVE),arg))
+        // 加锁失败，入队失败，则中断线程
+        selfInterrupt();
+        }
+
+/**
+ * 尝试以独占模式 acquire。此方法应查询对象的状态，判断是否允许以独占模式获取它。
+ *
+ * 此方法始终由执行 acquire 的线程调用。如果此方法报告失败，且该线程尚未入队，
+ * 则 acquire 方法可以将该线程排队，知道某个其他线程 release 并 signal。这
+ * 可用于实现 Lock.tryLock 方法。
+ *
+ * 默认实现抛出 UnsupportedOperationException 。
+ *
+ * 参数：arg - acquire 参数.。该值始终是传递给 acquire 方法的值，或者是在进入条件等待时
+ 保存的值。该值可以表示你喜欢的任何东西。
+ * 返回：如果成功，返回 true。成功后，该对象已 acquire。
+ * @throws IllegalMonitorStateException  如果获取会将此同步器置于非法状态。
+ *                                       必须以一致的方式抛出此异常，同步才能正常工作。
+ * @throws UnsupportedOperationException 如果不支持独占模式
+ */
+protected boolean tryAcquire(int arg){
+        throw new UnsupportedOperationException();
+        }
+
+
+/**
+ * 为当前线程和给定模式创建节点并入队节点。
+ *
+ * 参数：mode - Node.EXCLUSIVE 用于独占，Node.SHARED 用于共享
+ * 返回：新节点
+ */
+private Node addWaiter(Node mode){
+        // 创建当前线程和模式的新节点，此时 waitStatus 为 0
+        Node node=new Node(Thread.currentThread(),mode);
+        // 先尝试直接入队，当且仅当 tail 不为空时，直接将当前节点追加到 tail 后面
+        Node pred=tail;
+        if(pred!=null){
+        // 当前节点的前驱节点为 pred
+        node.prev=pred;
+        // 原子修改 tail 为当前节点
+        if(compareAndSetTail(pred,node)){
+        // pred 的后继节点指向当前节点
+        pred.next=node;
+        return node;
+        }
+        }
+        // tail 为空，或入队失败，则进行自旋 enq 入队
+        enq(node);
+        return node;
+        }
+
+/**
+ * 将节点插入队列，必要时进行初始化。
+ * 参数： node - 插入的节点
+ * 返回： 节点的前驱节点
+ */
+private Node enq(final Node node){
+        // 自旋进行插入操作
+        for(;;){
+        // 获取队列的 tail
+        Node t=tail;
+        // t 为空，说明队尾没有节点，说明还没有初始化
+        if(t==null){ // Must initialize
+        // 初始化操作，创建 head 节点
+        if(compareAndSetHead(new Node()))
+        // 将 tail 也指向 head
+        tail=head;
+        }else{
+        // 将队尾指向当前节点的前驱节点
+        node.prev=t;
+        // 设置当前节点为队尾
+        if(compareAndSetTail(t,node)){
+        // 设置 t 的后继节点为当前节点
+        t.next=node;
+        return t;
+        }
+        }
+        }
+        }
+
+
+/**
+ * 以独占模式且不中断，acquire 队列中的线程。由 condition 的 wait 和 acquire 方法使用。
+ *
+ * 参数：node - 节点
+ *      arg - acquire 参数
+ * 返回：如果在等待时被中断，返回 true
+ */
+final boolean acquireQueued(final Node node,int arg){
+        // acquire 是否失败
+        boolean failed=true;
+        try{
+        // 是否中断
+        boolean interrupted=false;
+        // 自旋尝试获取资源，每次自旋都会调用 tryAcquire 尝试获取资源，获取资源失败，则进入阻塞状态
+        // 成功则跳出自旋
+        for(;;){
+// 当前新入队节点的前驱节点
+final Node p=node.predecessor();
+        // 前驱节点为头节点时，尝试获取资源。
+        if(p==head&&tryAcquire(arg)){
+        // 获取资源成功，将当前节点设置为头结点
+        setHead(node);
+        // 断开前一个节点的链接，帮助 GC
+        p.next=null; // help GC
+        // 获取成功
+        failed=false;
+        // 返回是否中断
+        return interrupted;
+        }
+        // 判断在 acquire 失败后是否需要阻塞当前节点中的线程
+        if(shouldParkAfterFailedAcquire(p,node)&&
+        parkAndCheckInterrupt())
+        interrupted=true;
+        }
+        }finally{
+        if(failed)
+        cancelAcquire(node);
+        }
+        }
+
+/**
+ * 检查并更新 acquire 失败的节点的状态。如果线程应该阻塞，则返回 true。
+ * 这是所有循环 acquire 获取资源的主要 signal 控制方法。要求 pred == node.prev。
+ *
+ * 参数：pred - 节点的前驱节点持有的状态
+ *      node - 当前节点
+ * 返回：如果线程应该阻塞，返回 true。
+ */
+private static boolean shouldParkAfterFailedAcquire(Node pred,Node node){
+        // 前驱节点的等待状态
+        int ws=pred.waitStatus;
+        // 前驱结点状态为 SIGNAL，说明当前节点可以阻塞，pred 在完成后需要调用 release
+        if(ws==Node.SIGNAL)
+        /*
+         * 前驱节点状态设置为 Node.SIGNAL，等待被 release 调用释放，后继节点可以安全地进入阻塞。
+         */
+        return true;
+        if(ws>0){
+        /*
+         * 前驱节点为 CANCELLED，尝试把所有 CANCELLED 的前驱节点移除，找到一个
+         * 非取消的前驱节点。
+         */
+        do{
+        node.prev=pred=pred.prev;
+        }while(pred.waitStatus>0);
+        pred.next=node;
+        }else{
+        /*
+         * waitStatus 为 0 或 PROPAGATE.  表示我们需要一个 signal，
+         * 而不是阻塞。调用者需要重试以确保在阻塞前无法 acquire。
+         */
+        compareAndSetWaitStatus(pred,ws,Node.SIGNAL);
+        }
+        return false;
+        }
+
+/**
+ * park 后检查是否中断的便捷方法
+ *
+ * 返回：如果中断，返回true
+ */
+private final boolean parkAndCheckInterrupt(){
+        // park 当前线程
+        LockSupport.park(this);
+        // 判断是否中断
+        return Thread.interrupted();
+        }
+
+
+/**
+ * 将队列 head 设置为 node，从而使之前的节点出队。仅由 acquire 方法调用。
+ * 为了 GC 和抑制不必要的 signal 和遍历，同时也清空无用的字段。
+ *
+ * 参数：node - 节点
+ */
+private void setHead(Node node){
+        head=node;
+        node.thread=null;
+        node.prev=null;
+        }
+```
+
+依旧使用上面的例子，当 `thread-1` 入队时，此时队列为空，需要初始化一个空节点，之后将调用 `addWaiter()` 将  `thread-1` 入队：
+
+![aqs-thread-1-enq](/Users/wenbo.zhang/Desktop/images/AQS-thread-1-enq.png)
+
+此时，在 `thread-1` 等待过程中，将 `thread-2` 进行入队操作：
+
+![aqs-thread-2-enq](/Users/wenbo.zhang/Desktop/images/AQS-thread-2-enq.png)
+
+以上就是 `tryAcquire` 失败后的入队逻辑，可以看到，在节点进行入队时，会修改前驱节点的 waitStatus，当前驱节点 `release`
+时，会进行哪些操作呢？下面我们对 `release` 操作进行解析。
+
+##### 4.1.2 release
+
+在独占模式中，`release()` 用来释放资源，下面我们根据源码来解读 `AQS` 如何进行释放操作。
+
+```java
+/**
+ * 释放独占模式。如果 tryRelease 返回 true，则通过解锁一个或多个线程实现。此方法可以
+ * 用来实现方法 Lock.unlock.
+ *
+ * 参数：arg - release 参数。这个值被传递给 tryRelease，你可以用它表示任何你喜欢的东西。
+ * 返回：tryRelease 返回的值
+ */
+public final boolean release(int arg){
+        // 尝试释放资源
+        if(tryRelease(arg)){
+        Node h=head;
+        // head 不为空，且 waitStatus 不为 0 的情况下，唤醒后继节点
+        if(h!=null&&h.waitStatus!=0)
+        // 后继节点解除阻塞
+        unparkSuccessor(h);
+        return true;
+        }
+        return false;
+        }
+
+/**
+ * 尝试设置状态，以体现独占模式下的 release。
+ *
+ * 该方法总是由执行 release 的线程调用。
+ *
+ * 默认实现抛出 UnsupportedOperationException。
+ *
+ * 参数：arg - release 参数。此值始终是传递给 release 方法的值，或者是进入条件等待时的
+ *            当前状态值。该值是未解释的，可以表示任何你想要的内容。
+ *        uninterpreted and can represent anything you like.
+ * 返回：如果当前对象现在完全释放，则返回 true，以便任何等待的线程都可以尝试 acquire；否则 false。
+ * @throws IllegalMonitorStateException - 如果 release 会将此同步器置于非法状态。
+ *                                        必须以一致的方式抛出此异常，同步器才能正常工作。
+ * @throws UnsupportedOperationException - 如果不支持独占模式
+ */
+protected boolean tryRelease(int arg){
+        throw new UnsupportedOperationException();
+        }
+
+/**
+ * 如果节点存在后继节点，则唤醒后继节点。
+ *
+ * 参数：node - 节点
+ */
+private void unparkSuccessor(Node node){
+        /*
+         * 如果状态为负数（即可能需要 singal），尝试 clear 以等待 signal。
+         * 允许失败或等待线程更改状态。
+         */
+        int ws=node.waitStatus;
+        if(ws< 0)
+        // 将当前节点的 waitStatus 置为 0
+        compareAndSetWaitStatus(node,ws,0);
+
+        /*
+         * 当前线程的后继节点 unpark ，通常只是下一个节点。但如果下个节点为空或
+         * 已经取消，则从 tail 向后遍历以找到实际未取消的后继节点。
+         */
+        Node s=node.next;
+        // 后继节点为空，或后继节点是 CANCELLED
+        if(s==null||s.waitStatus>0){
+        s=null;
+        // 从 tail 开始，向 head 遍历，找到最接近 当前节点的不为空且未取消的节点
+        for(Node t=tail;t!=null&&t!=node;t=t.prev)
+        if(t.waitStatus<=0)
+        s=t;
+        }
+        // 找到之后，unpark 节点线程阻塞状态
+        if(s!=null)
+        LockSupport.unpark(s.thread);
+        }
+```
+
+当 `release` 操作成功 `unpark` 一个线程后，该线程在通过 `acquireQueued` 进行 `tryAcquire`
+成功后，就会将头结点设置为当前节点，并将之前的头结点以及线程字段置空，以方便 GC 回收，`thread-1` 获取到锁在执行过程中，状态如下：
+
+![aqs-thread-1-release](/Users/wenbo.zhang/Desktop/images/AQS-thread-1-release.png)
+
+`thread-1` 执行完成后，对 `thread-2` 进行 unpark 后，状态如下：
+
+![aqs-thread-2-release](/Users/wenbo.zhang/Desktop/images/AQS-thread-2-release.png)
+
+##### 4.1.3 acquireInterruptibly
+
+下面我们对 `acquire` 的变体，即带有响应中断版本的 `acquireInterruptibly` 方法进行解析：
+
+```java
+/**
+ * Acquires in exclusive mode, aborting if interrupted.
+ * Implemented by first checking interrupt status, then invoking
+ * at least once {@link #tryAcquire}, returning on
+ * success.  Otherwise the thread is queued, possibly repeatedly
+ * blocking and unblocking, invoking {@link #tryAcquire}
+ * until success or the thread is interrupted.  This method can be
+ * used to implement method {@link Lock#lockInterruptibly}.
+ *
+ * @param arg the acquire argument.  This value is conveyed to
+ *        {@link #tryAcquire} but is otherwise uninterpreted and
+ *        can represent anything you like.
+ * @throws InterruptedException if the current thread is interrupted
+ */
+public final void acquireInterruptibly(int arg)
+        throws InterruptedException{
+        if(Thread.interrupted())
+        throw new InterruptedException();
+        if(!tryAcquire(arg))
+        doAcquireInterruptibly(arg);
+        }
+```
+
+
 
