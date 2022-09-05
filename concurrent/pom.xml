@@ -46,6 +46,11 @@
             <artifactId>capstone</artifactId>
             <version>4.0.2</version>
         </dependency>
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>fastjson</artifactId>
+            <version>1.2.83-fix-npe</version>
+        </dependency>
     </dependencies>
 
 </project>
