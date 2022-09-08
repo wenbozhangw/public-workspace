@@ -2484,191 +2484,258 @@ class X {
 
 此锁最多支持同一线程的 2147483647 个递归锁。尝试超过此限制会导致锁定方法抛出 `Error` 。
 
+#### 8.1.1 Sync
+
+`ReentratLock` 的抽象类 `Sync` 作为 `AQS`框架实现类，用于同步控制的基础。可用于实现公平锁和非公平锁。主要通过使用 `AQS` 的状态来表示持有锁的次数，当 `AQS` 状态为 `0`，说明当前可能没有其他线程持有锁，`ReentrantLock`的每次获取锁都会讲 `AQS` 状态加一。下面是 `Sync` 的源码：
+
+```java
+/**
+ * 此锁的同步控制的基础。下面分为公平和非公平版本。使用 AQS 状态来表示
+ * 持有锁的次数。
+ */
+abstract static class Sync extends AbstractQueuedSynchronizer {
+    private static final long serialVersionUID = -5179523762034025860L;
+
+    /**
+     * 执行 Lock.lock。抽象方法的原因主要是非公平版本提供快速路径。
+     */
+    abstract void lock();
+
+    /**
+     * 执行非公平的 tryLock。tryAcquire 在子类中实现，但两者都需要对
+     * tryLock 方法进行非公平尝试。
+     */
+    final boolean nonfairTryAcquire(int acquires) {
+        // 获取当前执行线程
+        final Thread current = Thread.currentThread();
+        // 获取 AQS 当前状态
+        int c = getState();
+        // 当前状态为 0，说明锁可能没有被其他线程获取
+        if (c == 0) {
+            // cas 尝试加锁，将 AQS 状态修改为 acquires，成功后直接返回
+            if (compareAndSetState(0, acquires)) {
+                // 设置当前线程为独占
+                setExclusiveOwnerThread(current);
+                return true;
+            }
+        }
+        // 如果当前线程已经持有了锁，即当前线程就是独占锁的线程
+        else if (current == getExclusiveOwnerThread()) {
+            // 将状态直接加上 acquires
+            int nextc = c + acquires;
+            // 状态溢出
+            if (nextc < 0) // overflow
+                throw new Error("Maximum lock count exceeded");
+            // 当前线程就是持有锁的线程，所以直接设置 AQS 状态
+            setState(nextc);
+            return true;
+        }
+        // 既不是独占线程，状态也不为 0，说明当前锁被其他线程持有
+        return false;
+    }
+
+    /**
+     * 释放资源操作
+     */
+    protected final boolean tryRelease(int releases) {
+        // 计算释放后的状态值
+        int c = getState() - releases;
+        // 当前线程不是锁的持有者，抛出异常
+        if (Thread.currentThread() != getExclusiveOwnerThread())
+            throw new IllegalMonitorStateException();
+        // 是否完全释放
+        boolean free = false;
+        // 释放后状态值为 0，说明当前线程已经完全释放资源
+        // 如果不为 0，说明当前线程是重入操作的释放，还需要等执行完再次释放
+        if (c == 0) {
+            // 设置释放 flag
+            free = true;
+            // 取消当前线程的独占
+            setExclusiveOwnerThread(null);
+        }
+        // 设置 AQS 状态值
+        setState(c);
+        return free;
+    }
+
+    /**
+     * 当前线程是否是该独占锁的持有者
+     */
+    protected final boolean isHeldExclusively() {
+        // 虽然我们通常必须在拥有锁之前读取状态值，但是我们不需要
+        // 检查这样检查当前线程是否是持有者
+        return getExclusiveOwnerThread() == Thread.currentThread();
+    }
+
+    /**
+     * Condition 实例，用于和 Lock 一起使用
+     */
+    final ConditionObject newCondition() {
+        return new ConditionObject();
+    }
+
+// 从外部类中集成的方法
+
+    // 获取当前锁的独占线程
+    final Thread getOwner() {
+        return getState() == 0 ? null : getExclusiveOwnerThread();
+    }
+
+    // 获取当前 AQS 的状态值
+    final int getHoldCount() {
+        return isHeldExclusively() ? getState() : 0;
+    }
+
+    // 是否被锁定
+    final boolean isLocked() {
+        return getState() != 0;
+    }
+
+    /**
+     * 从流中重构实例（即反序列化）。
+     * 返回的实例为非锁定状态
+     */
+    private void readObject(java.io.ObjectInputStream s)
+            throws java.io.IOException, ClassNotFoundException {
+        s.defaultReadObject();
+        setState(0); // reset to unlocked state
+    }
+}
+```
+
+#### 8.1.2 公平锁和非公平锁
+
+公平锁和非公平锁在源码的实现中，差异很小，唯一的区别是公平锁会在加锁时，判断在自己之前是否有其他线程在等待，只有当自己是头结点（等待时间最长），之后才会尝试加锁。下面我们通过源码来了解一下，以下是非公平锁的实现：
+
+```java
+/**
+ * Sync 对象的非公平锁
+ */
+static final class NonfairSync extends Sync {
+    private static final long serialVersionUID = 7316153563782823691L;
+
+    /**
+     * 执行锁定操作。尝试直接修改 AQS 状态加锁（快速路径），失败时恢复正常 acquire。
+     */
+    final void lock() {
+        // CAS 尝试直接加锁，成功后将当前线程设置为独占线程
+        if (compareAndSetState(0, 1))
+            setExclusiveOwnerThread(Thread.currentThread());
+        else
+            // CAS 操作失败，正常进行 acquire 操作 
+            acquire(1);
+    }
+
+    /**
+     * tryAcquire 进行加锁操作，实现自 AQS，调用 Sync 进行非公平 tryAcquire
+     */
+    protected final boolean tryAcquire(int acquires) {
+        return nonfairTryAcquire(acquires);
+    }
+}
+```
+
+下面是公平锁的实现：
+
+```java
+/**
+ * Sync 对象的公平锁
+ */
+static final class FairSync extends Sync {
+    private static final long serialVersionUID = -3000897897090466540L;
+
+    // 公平锁，直接 acquire，不尝试快速路径
+    final void lock() {
+        acquire(1);
+    }
+
+    /**
+     * tryAcquire 的公平锁版本。除非递归调用，或者在没有等待节点时是第一个，否则不应该具有访问锁权限。
+     */
+    protected final boolean tryAcquire(int acquires) {
+        // 获取当前线程
+        final Thread current = Thread.currentThread();
+        // 获取 AQS 状态
+        int c = getState();
+        // 可能没有加锁
+        if (c == 0) {
+            // 先判断队列中是否有在自己之前的节点
+            if (!hasQueuedPredecessors() &&
+                    // 自己就是第一个节点，CAS 尝试加锁
+                    compareAndSetState(0, acquires)) {
+                // 设置独占
+                setExclusiveOwnerThread(current);
+                return true;
+            }
+        }
+        else if (current == getExclusiveOwnerThread()) {
+            int nextc = c + acquires;
+            if (nextc < 0)
+                throw new Error("Maximum lock count exceeded");
+            setState(nextc);
+            return true;
+        }
+        return false;
+    }
+}
+```
+
+可以看到，在 `tryAcquire` 时，公平锁会调用 `hasQueuedPredecessors()` 方法，先判断自己是否是头结点（头结点没有前驱节点），我们看下这个方法的源码：
+
+```java
+/**
+ * 查询是否有任何线程其他线程在队列中的等待时间大于当前线程。
+ *
+ * 调用此方法等效于（但是可能有更高效）：
+ * getFirstQueuedThread() != Thread.currentThread() &&
+ * hasQueuedThreads()
+ *
+ * 请注意，由于中断和超时可能随时会发生，从而导致节点取消，因此返回 true 并不代表着
+ * 某些其他线程会在当前线程之获取到锁。同样，由于队列为空，在此方法返回 false 时，
+ * 另一个线程可能会在竞争中先入队成功。
+ *
+ * 本方法目的在于供公平同步器的使用，从而避免”闯入“。如果一个同步器的 tryAcquire 
+ * 方法应该返回 false，并且他的 tryAcquireShared 方法应该返回一个负值，这个方法
+ * 返回 true（除非是可重入的获取）。
+ *
+ * protected boolean tryAcquire(int arg) {
+ *   if (isHeldExclusively()) {
+ *     // A reentrant acquire; increment hold count
+ *     return true;
+ *   } else if (hasQueuedPredecessors()) {
+ *     return false;
+ *   } else {
+ *     // try to acquire normally
+ *   }
+ * }
+ *
+ * @return 如果当前线程之前有一个排队线程，则为true ，如果当前线程位于队列的头部或队列为空，则为false
+ * @since 1.7
+ */
+public final boolean hasQueuedPredecessors() {
+    // 之所以这么做是因为 head 在 tail 之前被初始化，
+    // 先 tail 后 head，h.next 操作一定能获取到值。
+    // 如果按照先 h 再 t 的方式取值，可能会发生这样的情况：
+    // 此时队列为空 head 为 null，在 h 赋值完成后，其他线程
+    // 入队，此时 head 和 tail 都不为空，就造成了 h 不存在，
+    // 但是 t 却存在的情况。这种情况 h.next 就会抛出空指针了
+    Node t = tail; // 以相反的顺序读取字段
+    Node h = head;
+    Node s;
+    return h != t &&
+            ((s = h.next) == null || s.thread != Thread.currentThread());
+}
+```
+
+#### 8.1.3 ReentrantLock 类的其他方法
+
+除了核心的加锁和解锁方法外，`ReentrantLock` 还提供了其他的一些监控手段的方法，如下说明：
+
 ```java
 public class ReentrantLock implements Lock, java.io.Serializable {
     private static final long serialVersionUID = 7373984872572414699L;
     /** 提供实现所有机制的同步器 */
     private final Sync sync;
-
-    /**
-     * 此锁的同步控制的基础。下面分为公平和非公平版本。使用 AQS 状态来表示
-     * 持有锁的次数。
-     */
-    abstract static class Sync extends AbstractQueuedSynchronizer {
-        private static final long serialVersionUID = -5179523762034025860L;
-
-        /**
-         * 执行 Lock.lock。抽象方法的原因主要是非公平版本提供快速路径。
-         */
-        abstract void lock();
-        
-        /**
-         * 执行非公平的 tryLock。tryAcquire 在子类中实现，但两者都需要对
-         * tryLock 方法进行非公平尝试。
-         */
-        final boolean nonfairTryAcquire(int acquires) {
-            // 获取当前执行线程
-            final Thread current = Thread.currentThread();
-            // 获取 AQS 当前状态
-            int c = getState();
-            // 当前状态为 0，说明锁可能没有被其他线程获取
-            if (c == 0) {
-                // cas 尝试加锁，将 AQS 状态修改为 acquires，成功后直接返回
-                if (compareAndSetState(0, acquires)) {
-                    // 设置当前线程为独占
-                    setExclusiveOwnerThread(current);
-                    return true;
-                }
-            }
-            // 如果当前线程已经持有了锁，即当前线程就是独占锁的线程
-            else if (current == getExclusiveOwnerThread()) {
-                // 将状态直接加上 acquires
-                int nextc = c + acquires;
-                // 状态溢出
-                if (nextc < 0) // overflow
-                    throw new Error("Maximum lock count exceeded");
-                // 当前线程就是持有锁的线程，所以直接设置 AQS 状态
-                setState(nextc);
-                return true;
-            }
-            // 既不是独占线程，状态也不为 0，说明当前锁被其他线程持有
-            return false;
-        }
-        
-        /**
-         * 释放资源操作
-         */
-        protected final boolean tryRelease(int releases) {
-            // 计算释放后的状态值
-            int c = getState() - releases;
-            // 当前线程不是锁的持有者，抛出异常
-            if (Thread.currentThread() != getExclusiveOwnerThread())
-                throw new IllegalMonitorStateException();
-            // 是否完全释放
-            boolean free = false;
-            // 释放后状态值为 0，说明当前线程已经完全释放资源
-            // 如果不为 0，说明当前线程是重入操作的释放，还需要等执行完再次释放
-            if (c == 0) {
-                // 设置释放 flag
-                free = true;
-                // 取消当前线程的独占
-                setExclusiveOwnerThread(null);
-            }
-            // 设置 AQS 状态值
-            setState(c);
-            return free;
-        }
-        
-        /**
-         * 当前线程是否是该独占锁的持有者
-         */
-        protected final boolean isHeldExclusively() {
-            // 虽然我们通常必须在拥有锁之前读取状态值，但是我们不需要
-            // 检查这样检查当前线程是否是持有者
-            return getExclusiveOwnerThread() == Thread.currentThread();
-        }
-		
-        /**
-         * Condition 实例，用于和 Lock 一起使用
-         */
-        final ConditionObject newCondition() {
-            return new ConditionObject();
-        }
-
-        // 从外部类中集成的方法
-
-        // 获取当前锁的独占线程
-        final Thread getOwner() {
-            return getState() == 0 ? null : getExclusiveOwnerThread();
-        }
-
-        // 获取当前 AQS 的状态值
-        final int getHoldCount() {
-            return isHeldExclusively() ? getState() : 0;
-        }
-
-        // 是否被锁定
-        final boolean isLocked() {
-            return getState() != 0;
-        }
-
-        /**
-         * 从流中重构实例（即反序列化）。
-         * 返回的实例为非锁定状态
-         */
-        private void readObject(java.io.ObjectInputStream s)
-            throws java.io.IOException, ClassNotFoundException {
-            s.defaultReadObject();
-            setState(0); // reset to unlocked state
-        }
-    }
-
-    /**
-     * Sync 对象的非公平锁
-     */
-    static final class NonfairSync extends Sync {
-        private static final long serialVersionUID = 7316153563782823691L;
-
-        /**
-         * 执行锁定操作。尝试直接修改 AQS 状态加锁（快速路径），失败时恢复正常 acquire。
-         */
-        final void lock() {
-            // CAS 尝试直接加锁，成功后将当前线程设置为独占线程
-            if (compareAndSetState(0, 1))
-                setExclusiveOwnerThread(Thread.currentThread());
-            else
-                // CAS 操作失败，正常进行 acquire 操作 
-                acquire(1);
-        }
-		
-        /**
-         * tryAcquire 进行加锁操作，实现自 AQS，调用 Sync 进行非公平 tryAcquire
-         */
-        protected final boolean tryAcquire(int acquires) {
-            return nonfairTryAcquire(acquires);
-        }
-    }
-
-    /**
-     * Sync 对象的公平锁
-     */
-    static final class FairSync extends Sync {
-        private static final long serialVersionUID = -3000897897090466540L;
-
-        // 公平锁，直接 acquire，不尝试快速路径
-        final void lock() {
-            acquire(1);
-        }
-
-        /**
-         * tryAcquire 的公平锁版本。除非递归调用，或者在没有等待节点时是第一个，否则不应该具有访问锁权限。
-         */
-        protected final boolean tryAcquire(int acquires) {
-            // 获取当前线程
-            final Thread current = Thread.currentThread();
-            // 获取 AQS 状态
-            int c = getState();
-            // 可能没有加锁
-            if (c == 0) {
-                // 先判断队列中是否有在自己之前的节点
-                if (!hasQueuedPredecessors() &&
-                    // 自己就是第一个节点，CAS 尝试加锁
-                    compareAndSetState(0, acquires)) {
-                    // 设置独占
-                    setExclusiveOwnerThread(current);
-                    return true;
-                }
-            }
-            else if (current == getExclusiveOwnerThread()) {
-                int nextc = c + acquires;
-                if (nextc < 0)
-                    throw new Error("Maximum lock count exceeded");
-                setState(nextc);
-                return true;
-            }
-            return false;
-        }
-    }
 
     /**
      * 创建 ReentrantLock 的实例。这相当于 ReentrantLock(false)。
@@ -2711,6 +2778,7 @@ public class ReentrantLock implements Lock, java.io.Serializable {
      * 直到发生以下两种情况之一：
      * - 当前线程获取锁成功；或者
      * - 其他线程中断当前线程。
+     *
      * 如果当前线程获取到了锁，则锁持有计数设置为 1。
      *
      * 如果当前线程：
@@ -2747,76 +2815,48 @@ public class ReentrantLock implements Lock, java.io.Serializable {
     }
 
     /**
-     * Acquires the lock if it is not held by another thread within the given
-     * waiting time and the current thread has not been
-     * {@linkplain Thread#interrupt interrupted}.
+     * 如果在给定的等待时间内没有被其他线程持有锁，且当前线程没有被中断，则获取锁。
      *
-     * <p>Acquires the lock if it is not held by another thread and returns
-     * immediately with the value {@code true}, setting the lock hold count
-     * to one. If this lock has been set to use a fair ordering policy then
-     * an available lock <em>will not</em> be acquired if any other threads
-     * are waiting for the lock. This is in contrast to the {@link #tryLock()}
-     * method. If you want a timed {@code tryLock} that does permit barging on
-     * a fair lock then combine the timed and un-timed forms together:
+     * 如果锁没有被另一个线程持有，则获取锁，并立即返回 true，且会将锁持有的计数设置为 1。如果
+     * 此锁已设置为使用公平排序策略，则在该线程之前排队任何其他线程正在等待该锁，则不会获取到锁。
+     * 这与 tryLock() 方法形成对比。如果你想要一个允许 “闯入” 公平锁的可超时 tryLock，则可以
+     * 将超时和非超时方法相结合使用：
      *
-     *  <pre> {@code
      * if (lock.tryLock() ||
      *     lock.tryLock(timeout, unit)) {
-     *   ...
-     * }}</pre>
+     *     ...
+     * }
      *
-     * <p>If the current thread
-     * already holds this lock then the hold count is incremented by one and
-     * the method returns {@code true}.
      *
-     * <p>If the lock is held by another thread then the
-     * current thread becomes disabled for thread scheduling
-     * purposes and lies dormant until one of three things happens:
+     * 如果没有被另一个线程持有，则获取锁并立即返回，将锁持有计数设置为 1。
      *
-     * <ul>
+     * 如果当前线程已经持有锁，则持有次数加 1 并立即返回。
      *
-     * <li>The lock is acquired by the current thread; or
+     * 如果锁被另一个线程持有，那么当前线程出于线程调度的目的，将会被禁用并处于休眠状态，
+     * 直到发生以下三种情况之一：
+     * - 当前线程获取锁成功；或者
+     * - 其他线程中断当前线程；或者
+     * - 达到了指定的超时等待时间。
      *
-     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
-     * the current thread; or
+     * 如果当前线程获取到了锁，则锁持有计数设置为 1。
      *
-     * <li>The specified waiting time elapses
+     * 如果当前线程：
+     * - 在进入此方法时设置其中断状态；或者
+     * - 在获取锁过程中被中断，
+     * 然后会抛出 InterruptedException 并清除当前线程的中断状态。
      *
-     * </ul>
+     * 如果到达了指定的超时时间，则返回 false。如果时间小于或等于零，则该方法不会等待。
      *
-     * <p>If the lock is acquired then the value {@code true} is returned and
-     * the lock hold count is set to one.
+     * 在此实现中，由于此方法明显表示出中断能力，因此优先响应中断而不是
+     * 正常执行或可重入获取锁，同时也优先于报告超过等待时间。
      *
-     * <p>If the current thread:
      *
-     * <ul>
-     *
-     * <li>has its interrupted status set on entry to this method; or
-     *
-     * <li>is {@linkplain Thread#interrupt interrupted} while
-     * acquiring the lock,
-     *
-     * </ul>
-     * then {@link InterruptedException} is thrown and the current thread's
-     * interrupted status is cleared.
-     *
-     * <p>If the specified waiting time elapses then the value {@code false}
-     * is returned.  If the time is less than or equal to zero, the method
-     * will not wait at all.
-     *
-     * <p>In this implementation, as this method is an explicit
-     * interruption point, preference is given to responding to the
-     * interrupt over normal or reentrant acquisition of the lock, and
-     * over reporting the elapse of the waiting time.
-     *
-     * @param timeout the time to wait for the lock
-     * @param unit the time unit of the timeout argument
-     * @return {@code true} if the lock was free and was acquired by the
-     *         current thread, or the lock was already held by the current
-     *         thread; and {@code false} if the waiting time elapsed before
-     *         the lock could be acquired
-     * @throws InterruptedException if the current thread is interrupted
-     * @throws NullPointerException if the time unit is null
+     * 参数：timeout - 等待锁的时间
+     *      unit - timeout 参数的时间单位
+     * 返回：如果锁是空闲的并被当前线程获取到，或者锁已经被当前线程持有，则返回true；
+     *      如果在获得锁之前达到了超时时间，则返回 false
+     * @throws InterruptedException - 如果当前线程被中断
+     * @throws NullPointerException - 如果时间单位为空
      */
     public boolean tryLock(long timeout, TimeUnit unit)
             throws InterruptedException {
@@ -2824,274 +2864,210 @@ public class ReentrantLock implements Lock, java.io.Serializable {
     }
 
     /**
-     * Attempts to release this lock.
+     * 尝试释放此锁。
      *
-     * <p>If the current thread is the holder of this lock then the hold
-     * count is decremented.  If the hold count is now zero then the lock
-     * is released.  If the current thread is not the holder of this
-     * lock then {@link IllegalMonitorStateException} is thrown.
+     * 如果当前线程是这个锁的持有者，那么持有计数就会递减。如果持有计数现在为 0，则直接释放锁。
+     * 如果当前线程不是该锁的持有者，则抛出 IllegalMonitorStateException。
      *
-     * @throws IllegalMonitorStateException if the current thread does not
-     *         hold this lock
+     * @throws IllegalMonitorStateException - 如果当前线程没有持有这个锁。
      */
     public void unlock() {
         sync.release(1);
     }
 
     /**
-     * Returns a {@link Condition} instance for use with this
-     * {@link Lock} instance.
+     * 返回与当前 Lock 实例一起使用的 Condition 实例。
      *
-     * <p>The returned {@link Condition} instance supports the same
-     * usages as do the {@link Object} monitor methods ({@link
-     * Object#wait() wait}, {@link Object#notify notify}, and {@link
-     * Object#notifyAll notifyAll}) when used with the built-in
-     * monitor lock.
+     * 当与内置的监视器锁一起使用时，返回的 Condition 实例支持与 Object 监视器方法
+     * （wait、notify 和 notifyAll） 相同的用法。
      *
-     * <ul>
+     * - 如果在调用任何 Condition 的 await 和 signal 方法时，未持有锁，则会引发 
+     *   IllegalMonitorStateException。
+     * - 当 Condition 的 await 方法被调用时，锁被释放，在该线程返回前，锁会被其他线程
+     *   重新获得，锁持有计数会恢复到调用方法时的状态。
+     * - 如果线程在等待过程中被中断，则等待终止，并抛出 InterruptedException，并清除
+     *   线程的中断状态。
+     * - 以 FIFO 顺序 signal 等待线程。
+     * - 从 await 方法返回的线程重新获取锁的顺序与最初获取锁的线程顺序相同，在默认情况下，
+     *   非公平锁，未指定顺序；但对于公平锁，优先考虑那些等待时间长的线程。
      *
-     * <li>If this lock is not held when any of the {@link Condition}
-     * {@linkplain Condition#await() waiting} or {@linkplain
-     * Condition#signal signalling} methods are called, then an {@link
-     * IllegalMonitorStateException} is thrown.
-     *
-     * <li>When the condition {@linkplain Condition#await() waiting}
-     * methods are called the lock is released and, before they
-     * return, the lock is reacquired and the lock hold count restored
-     * to what it was when the method was called.
-     *
-     * <li>If a thread is {@linkplain Thread#interrupt interrupted}
-     * while waiting then the wait will terminate, an {@link
-     * InterruptedException} will be thrown, and the thread's
-     * interrupted status will be cleared.
-     *
-     * <li> Waiting threads are signalled in FIFO order.
-     *
-     * <li>The ordering of lock reacquisition for threads returning
-     * from waiting methods is the same as for threads initially
-     * acquiring the lock, which is in the default case not specified,
-     * but for <em>fair</em> locks favors those threads that have been
-     * waiting the longest.
-     *
-     * </ul>
-     *
-     * @return the Condition object
+     * 返回：Condition 对象
      */
     public Condition newCondition() {
         return sync.newCondition();
     }
 
     /**
-     * Queries the number of holds on this lock by the current thread.
+     * 查询当前线程持有该锁的次数。
      *
-     * <p>A thread has a hold on a lock for each lock action that is not
-     * matched by an unlock action.
+     * 如果解锁的次数和加锁的次数不匹配，那么该线程会持有该锁。
      *
-     * <p>The hold count information is typically only used for testing and
-     * debugging purposes. For example, if a certain section of code should
-     * not be entered with the lock already held then we can assert that
-     * fact:
-     *
-     *  <pre> {@code
+     * 持有计数信息通常仅用于测试和调试目的。例如，如果某段代码不应该在已经持有锁的情况下输入，
+     * 那么我们可以断言这个事实：
+     * 
      * class X {
-     *   ReentrantLock lock = new ReentrantLock();
-     *   // ...
-     *   public void m() {
-     *     assert lock.getHoldCount() == 0;
-     *     lock.lock();
-     *     try {
-     *       // ... method body
-     *     } finally {
-     *       lock.unlock();
+     *     ReentrantLock lock = new ReentrantLock();
+     *     // ...
+     *     public void m() {
+     *         assert lock.getHoldCount() == 0;
+     *         lock.lock();
+     *         try {
+     *             // ... method body
+     *         } finally {
+     *             lock.unlock();
+     *         }
      *     }
-     *   }
-     * }}</pre>
+     * }
      *
-     * @return the number of holds on this lock by the current thread,
-     *         or zero if this lock is not held by the current thread
+     * 返回：当前线程持有锁的次数，如果当前线程未持有锁，则为零
      */
     public int getHoldCount() {
         return sync.getHoldCount();
     }
 
     /**
-     * Queries if this lock is held by the current thread.
+     * 查询当前线程是否持有该锁。
      *
-     * <p>Analogous to the {@link Thread#holdsLock(Object)} method for
-     * built-in monitor locks, this method is typically used for
-     * debugging and testing. For example, a method that should only be
-     * called while a lock is held can assert that this is the case:
+     * 类似于内置监视器锁的 Thread.holdsLock(Object) 方法，此方法通常用于调试和测试。
+     * 例如，如果一个线程只有在持有锁时，才调用该方法，可以这样断言：
      *
-     *  <pre> {@code
-     * class X {
-     *   ReentrantLock lock = new ReentrantLock();
-     *   // ...
+     * class X{
+     *     ReentrantLock lock = new ReentrantLock();
+     *     // ...
+     *     
+     *     public void m(){
+     *         assert lock.isHeldByCurrentThread();
+     *         // ... method body
+     *     }
+     * }
      *
-     *   public void m() {
-     *       assert lock.isHeldByCurrentThread();
-     *       // ... method body
-     *   }
-     * }}</pre>
+     * 它还可以用于确保以不可重入方式使用可重入锁，例如：
      *
-     * <p>It can also be used to ensure that a reentrant lock is used
-     * in a non-reentrant manner, for example:
+     * class X{
+     *     ReentrantLock lock = new ReentrantLock();
+     *     // ...
+     *     
+     *     public void m(){
+     *         assert !lock.isHeldByCurrentThread();
+     *         lock.lock();
+     *         try {
+     *             // ... method body
+     *         } finally {
+     *             lock.unlock;
+     *         }
+     *     }
+     * }
      *
-     *  <pre> {@code
-     * class X {
-     *   ReentrantLock lock = new ReentrantLock();
-     *   // ...
-     *
-     *   public void m() {
-     *       assert !lock.isHeldByCurrentThread();
-     *       lock.lock();
-     *       try {
-     *           // ... method body
-     *       } finally {
-     *           lock.unlock();
-     *       }
-     *   }
-     * }}</pre>
-     *
-     * @return {@code true} if current thread holds this lock and
-     *         {@code false} otherwise
+     * 返回：如果当前线程持有该锁，返回 true；否则返回 false
      */
     public boolean isHeldByCurrentThread() {
         return sync.isHeldExclusively();
     }
 
     /**
-     * Queries if this lock is held by any thread. This method is
-     * designed for use in monitoring of the system state,
-     * not for synchronization control.
+     * 查询当前锁是否被持有。此方法设计用于监控系统状态，而不用于同步控制。
      *
-     * @return {@code true} if any thread holds this lock and
-     *         {@code false} otherwise
+     * 返回：任何线程持有此锁，返回 true；否则返回 false。
      */
     public boolean isLocked() {
         return sync.isLocked();
     }
 
     /**
-     * Returns {@code true} if this lock has fairness set true.
+     * 如果此锁的公平性设置为 true，则返回 true。
      *
-     * @return {@code true} if this lock has fairness set true
+     * 返回：如果此锁的公平性设置为 true，则返回 true。
      */
     public final boolean isFair() {
         return sync instanceof FairSync;
     }
 
     /**
-     * Returns the thread that currently owns this lock, or
-     * {@code null} if not owned. When this method is called by a
-     * thread that is not the owner, the return value reflects a
-     * best-effort approximation of current lock status. For example,
-     * the owner may be momentarily {@code null} even if there are
-     * threads trying to acquire the lock but have not yet done so.
-     * This method is designed to facilitate construction of
-     * subclasses that provide more extensive lock monitoring
-     * facilities.
+     * 返回拥有此锁的线程，如果锁没有被持有，返回 null。如果当前线程不是锁的持有者，
+     * 调用此方法会返回当前锁定状态的近似值。例如，即使有线程在尝试获取锁，但还没有
+     * 获取成功，所有者也可能暂时为 null。此方法主要目的在于促进提供更广泛的锁监视
+     * 设施的子类的构建。
      *
-     * @return the owner, or {@code null} if not owned
+     * 返回：锁的持有者，如果没有，返回 null。
      */
     protected Thread getOwner() {
         return sync.getOwner();
     }
 
     /**
-     * Queries whether any threads are waiting to acquire this lock. Note that
-     * because cancellations may occur at any time, a {@code true}
-     * return does not guarantee that any other thread will ever
-     * acquire this lock.  This method is designed primarily for use in
-     * monitoring of the system state.
+     * 查询是否有线程正在等待获取此锁。请注意，由于取消可能随时发生，因此返回 true，
+     * 并不意味着其他线程就会获取锁。此方法主要设计用于监控系统状态。
      *
-     * @return {@code true} if there may be other threads waiting to
-     *         acquire the lock
+     * 返回：如果可能有其他线程等待获取锁，则为true。
      */
     public final boolean hasQueuedThreads() {
         return sync.hasQueuedThreads();
     }
 
     /**
-     * Queries whether the given thread is waiting to acquire this
-     * lock. Note that because cancellations may occur at any time, a
-     * {@code true} return does not guarantee that this thread
-     * will ever acquire this lock.  This method is designed primarily for use
-     * in monitoring of the system state.
+     * 查询给定线程是否正在等待获取此锁。请注意，由于取消可能随时发生，因此返回 true，
+     * 并不意味着该线程就会获取锁。此方法主要设计用于监控系统状态。
      *
-     * @param thread the thread
-     * @return {@code true} if the given thread is queued waiting for this lock
-     * @throws NullPointerException if the thread is null
+     * 参数：thread - 线程
+     * 返回：如果给定线程可能等待获取锁，则为true。
+     * @throws NullPointerException thread 为 null
      */
     public final boolean hasQueuedThread(Thread thread) {
         return sync.isQueued(thread);
     }
 
     /**
-     * Returns an estimate of the number of threads waiting to
-     * acquire this lock.  The value is only an estimate because the number of
-     * threads may change dynamically while this method traverses
-     * internal data structures.  This method is designed for use in
-     * monitoring of the system state, not for synchronization
-     * control.
+     * 返回等待获取该锁的线程数的近似值。该值为一个预估值，因为在该方法遍历内部
+     * 数据结构时，线程数可能会动态发生变化。此方法主要设计用于监控系统状态，而不
+     * 是用于同步控制。
      *
-     * @return the estimated number of threads waiting for this lock
+     * 返回：等待此锁的预估线程数
      */
     public final int getQueueLength() {
         return sync.getQueueLength();
     }
 
     /**
-     * Returns a collection containing threads that may be waiting to
-     * acquire this lock.  Because the actual set of threads may change
-     * dynamically while constructing this result, the returned
-     * collection is only a best-effort estimate.  The elements of the
-     * returned collection are in no particular order.  This method is
-     * designed to facilitate construction of subclasses that provide
-     * more extensive monitoring facilities.
+     * 返回一个集合，其中包含正在等待获取此锁的线程。因为在构造这个结果时，实际的
+     * 线程集合可能会动态变化，所以返回的集合只是预估值。返回集合的元素没有特定顺序。
+     * 此方法主要目的在于促进提供更广泛的锁监视设施的子类的构建。
      *
-     * @return the collection of threads
+     * 返回：线程集合。
      */
     protected Collection<Thread> getQueuedThreads() {
         return sync.getQueuedThreads();
     }
 
     /**
-     * Queries whether any threads are waiting on the given condition
-     * associated with this lock. Note that because timeouts and
-     * interrupts may occur at any time, a {@code true} return does
-     * not guarantee that a future {@code signal} will awaken any
-     * threads.  This method is designed primarily for use in
-     * monitoring of the system state.
-     *
-     * @param condition the condition
-     * @return {@code true} if there are any waiting threads
-     * @throws IllegalMonitorStateException if this lock is not held
-     * @throws IllegalArgumentException if the given condition is
-     *         not associated with this lock
-     * @throws NullPointerException if the condition is null
+     * 查询是否有线程正在等待与当前锁关联的 Condition。请注意，
+     * 由于超时和中断可能随时发生，因此返回 true，并不意味着将来 signal 无法唤醒等待线程。
+     * 此方法主要设计用于监控系统状态。
+     * 
+     * 参数：condition - condition
+     * 返回：如果有任何等待线程，返回 true
+     * @throws IllegalMonitorStateException - 如果没有持有这个锁
+     * @throws IllegalArgumentException - 如果给定条件与此锁没有关联
+     * @throws NullPointerException - condition 为 null
      */
     public boolean hasWaiters(Condition condition) {
         if (condition == null)
             throw new NullPointerException();
         if (!(condition instanceof AbstractQueuedSynchronizer.ConditionObject))
             throw new IllegalArgumentException("not owner");
+        // 判断当前 condition 是否存在等待节点
         return sync.hasWaiters((AbstractQueuedSynchronizer.ConditionObject)condition);
     }
 
     /**
-     * Returns an estimate of the number of threads waiting on the
-     * given condition associated with this lock. Note that because
-     * timeouts and interrupts may occur at any time, the estimate
-     * serves only as an upper bound on the actual number of waiters.
-     * This method is designed for use in monitoring of the system
-     * state, not for synchronization control.
-     *
-     * @param condition the condition
-     * @return the estimated number of waiting threads
-     * @throws IllegalMonitorStateException if this lock is not held
-     * @throws IllegalArgumentException if the given condition is
-     *         not associated with this lock
-     * @throws NullPointerException if the condition is null
+     * 返回等待与当前锁关联的给定 condtion 的线程数的估计值。请注意，
+     * 由于超时和中断可能随时发生，因此此值进作为实际等待节点的上限。
+     * 此方法主要设计用于监控系统状态，不用来做同步控制。
+     * 
+     * 参数：condition - condition
+     * 返回：预估的等待线程数
+     * @throws IllegalMonitorStateException - 如果没有持有这个锁
+     * @throws IllegalArgumentException - 如果给定条件与此锁没有关联
+     * @throws NullPointerException - condition 为 null
      */
     public int getWaitQueueLength(Condition condition) {
         if (condition == null)
@@ -3102,21 +3078,15 @@ public class ReentrantLock implements Lock, java.io.Serializable {
     }
 
     /**
-     * Returns a collection containing those threads that may be
-     * waiting on the given condition associated with this lock.
-     * Because the actual set of threads may change dynamically while
-     * constructing this result, the returned collection is only a
-     * best-effort estimate. The elements of the returned collection
-     * are in no particular order.  This method is designed to
-     * facilitate construction of subclasses that provide more
-     * extensive condition monitoring facilities.
+     * 返回线程集合，其中包含可能正在等待与此锁相关联的指定 condition 的线程。因为在
+     * 构造这个结果时，实际的线程集合可能会动态变化，所以该集合返回的只是一个近似值。
+     * 返回集合的元素没有特定顺序。此方法主要目的在于促进提供更广泛的锁监视设施的子类的构建。
      *
-     * @param condition the condition
-     * @return the collection of threads
-     * @throws IllegalMonitorStateException if this lock is not held
-     * @throws IllegalArgumentException if the given condition is
-     *         not associated with this lock
-     * @throws NullPointerException if the condition is null
+     * 参数：condition - condition
+     * 返回：线程集合
+     * @throws IllegalMonitorStateException - 如果没有持有这个锁
+     * @throws IllegalArgumentException - 如果给定条件与此锁没有关联
+     * @throws NullPointerException - condition 为 null
      */
     protected Collection<Thread> getWaitingThreads(Condition condition) {
         if (condition == null)
@@ -3127,12 +3097,10 @@ public class ReentrantLock implements Lock, java.io.Serializable {
     }
 
     /**
-     * Returns a string identifying this lock, as well as its lock state.
-     * The state, in brackets, includes either the String {@code "Unlocked"}
-     * or the String {@code "Locked by"} followed by the
-     * {@linkplain Thread#getName name} of the owning thread.
+     * 返回标识此锁的字符串及其锁状态。。括号中的状态包括字符串 "Unlocked" 或字符串
+     * "Locked by" 后跟拥有锁的线程的名称。
      *
-     * @return a string identifying this lock, as well as its lock state
+     * 返回：一个标识这个锁的字符串，以及它的锁状态
      */
     public String toString() {
         Thread o = sync.getOwner();
@@ -3143,5 +3111,136 @@ public class ReentrantLock implements Lock, java.io.Serializable {
 }
 ```
 
+### 8.2 ReentantReadWriteLock
 
+该锁实现了 `ReadWriteLock` 接口，并支持和 `ReentrantLock` 相似的语义。
 
+此类具有以下属性：
+
+- **顺序加锁**
+
+  此类不会为读锁和写锁的访问强加优先级顺序。但是，它支持可选的 *公平* 策略。
+
+  - **非公平模式（默认）**
+
+    当构造非公平（默认）锁时，进入读写锁的顺序是未指定的，并受到重入的约束。一直存在竞争的非公平锁可能会无限期地推迟一个或多个读锁或写锁线程，但通常比公平锁具有更高的吞吐量。
+
+  - **公平模式**
+
+    当构造为公平锁时，线程使用近似到达顺序策略竞争入队。如果当前持有的锁被释放，要么为等待时间最长的单个写入线程分配写锁，要么如果有一组读取线程等待时间比写入线程长，则为读取线程分配读锁。
+
+    如果持有写锁或存在等待写入线程，则尝试获取公平锁（不可重入）的线程将阻塞。直到当前等待时间最长的写入线程获得写锁并释放之后，该线程才会获得读锁。当然，在没有线程获取写锁的情况下，如果一个等待的写入线程放弃等待，剩下的一个或多个读取线程将作为队列中等待时间最长的，被分配读锁。
+
+    除非读锁和写锁都空闲（这意味着没有等待的线程），否则试图获取公平写锁（不可重入）的线程将阻塞。（请注意，非阻塞 `ReentrantReadWriteLock.ReadLock.tryLock()` 和 `ReentrantReadWriteLock.WriteLock.tryLock()` 方法不遵守此公平设置，如果可能，将立即获取锁，而不管等待线程。）
+
+- **重入**
+
+  此锁允许读取线程和写入线程以 `ReentrantLock` 一样的方式重新获取读锁或写锁。在写入线程持有的所有写锁都被释放之前，不允许非重入的读取线程。
+
+  此外，写入线程可以获取读锁，但反之则不行。在其他应用程序中，当对在读锁下执行读取操作的方法在调用或回调期间持有写锁时，可重入性可能很有用。如果一个读取线程试图获得写锁，它将永远不会成功。
+
+- **锁降级**
+
+  重入还允许从写锁降级为读锁，方法是获取写锁，然后获取读锁，然后释放写锁。但是，**无法** 从读锁升级为写锁。
+
+- **锁获取中断**
+
+  读锁和写锁都支持获取锁过程中的中断。
+
+- **Condition 支持**
+
+  写锁提供了一个 `Condition` 实现，就写锁而言，它的行为方式与 `ReentrantLock.newCondition` 提供的实现的行为方式相同。当然，这个 `Condition` 只能与写锁一起使用。读锁不支持 `Condition` 并且 `readLock().newCondition()` 抛出 `UnsupportedOperationException`。
+
+- **Instrumentation**
+
+  此类支持确定锁是否被持有或竞争的方法。这些方法是为监控系统状态而设计的，而不是为同步控制而设计的。
+
+此类的序列化与内置锁的行为方式相同：反序列化锁将处于未锁定状态，无论其在序列化时的状态如何。
+
+示例用法。这是一个代码草图，展示了如果在更新缓存后执行锁降级（以非嵌套方式处理多个锁时，异常处理特别棘手）：
+
+```java
+class CachedData {
+    Object data;
+    volatile boolean cacheVaild;
+    final ReentrantReadWriteLock rwl = new ReentrantReadWriteLock();
+
+    void processCachedData() {
+        rwl.readLock().lock();
+        if (!cacheVaild) {
+            // Must release read lock before acquiring write lock
+            rwl.readLock().unlock();
+            rwl.writeLock().lock();
+            try {
+                // Recheck state because another thread might have
+                // acquired write lock and changed state before we did.
+                if (!cacheVaild) {
+                    data = ...
+                    cacheVaild = true;
+                }
+                // Downgrade by acquiring read lock before releasing write lock
+                rwl.readLock().lock();
+            } finally {
+                rwl.writeLock().unlock(); // Unlock write, still hold read
+            }
+        }
+        
+        try {
+            use(data);
+        } finally {
+            rwl.readLock().unlock();
+        }
+    }
+}
+```
+
+`ReentrantReadWriteLock` 可以用于在某些集合的某些用途中提高并发性能。通常，只有当集合预计很大、被很多线程读取，但对写入很少时，并且开销要超过同步开销的操作时，才值得这么做。例如，这里有一个使用 `TreeMap` 的类，该类预计会很大，并且可以并发访问。
+
+```java
+class RWDictionary {
+    private final Map<String, Data> m = new TreeMap<String, Data>();
+    private final ReentrantReadWriteLock rwl = new ReentrantReadWriteLock();
+    private final Lock r = rwl.readLock();
+    private final Lock w = rwl.writeLock();
+
+    public Data get(String key) {
+        r.lock();
+        try {
+            return m.get(key);
+        } finally {
+            r.unlock();
+        }
+    }
+
+    public String[] allKeys() {
+        r.lock();
+        try {
+            return m.keySet().toArray();
+        } finally {
+            r.unlock();
+        }
+    }
+
+    public Data put(String key, Data value) {
+        w.lock();
+        try {
+            return m.put(key, value);
+        } finally {
+            w.unlock();
+        }
+    }
+
+    public void clear() {
+        w.lock();
+        try {
+            m.clear();
+        } finally {
+            w.unlock();
+        }
+    }
+}
+```
+
+**实现注意事项**
+
+该锁最多支持 65535 个重入写锁和 65535 个读锁。如果超出这些限制会导致 `lock` 方法引发 `Error`。
