@@ -2448,7 +2448,7 @@ private void cancelAcquire(Node node) {
 
 
 
-## 八、AQS 实现
+## 八、AQS 的锁实现
 
 `AQS` 作为同步器框架，其提供的基础的功能给并发组件，下面我们将根据 `j.u.c` 包内置的同步组件，来了解 `AQS` 的使用。
 
@@ -3444,8 +3444,8 @@ abstract static class Sync extends AbstractQueuedSynchronizer {
                 firstReaderHoldCount--;
         } else {
             // 如果不是当前线程，说明现在有多个线程持有读锁
-            // 如果缓存是 null 或者 缓存线程不是当前线程，说明当前线程不是最后一个持有
-            // 读锁的线程，则从 threadLocal 读取
+            // 如果缓存是 null 或者 缓存线程不是当前线程，说明当前线程不是最后一次获取
+            // 持有读锁的线程，则从 threadLocal 读取
             HoldCounter rh = cachedHoldCounter;
             if (rh == null || rh.tid != getThreadId(current))
                 rh = readHolds.get();
@@ -3478,101 +3478,149 @@ abstract static class Sync extends AbstractQueuedSynchronizer {
                 "attempt to unlock read lock, not locked by current thread");
     }
 
+    // 共享（写）锁的获取
     protected final int tryAcquireShared(int unused) {
         /*
-         * Walkthrough:
-         * 1. If write lock held by another thread, fail.
-         * 2. Otherwise, this thread is eligible for
-         *    lock wrt state, so ask if it should block
-         *    because of queue policy. If not, try
-         *    to grant by CASing state and updating count.
-         *    Note that step does not check for reentrant
-         *    acquires, which is postponed to full version
-         *    to avoid having to check hold count in
-         *    the more typical non-reentrant case.
-         * 3. If step 2 fails either because thread
-         *    apparently not eligible or CAS fails or count
-         *    saturated, chain to version with full retry loop.
+         * 步骤：
+         * 1. 如果写锁被另一个线程持有，则失败。
+         * 2. 否则，该线程有资格获得锁定状态，因此请询问它是否应该
+         *    因为队列策略而阻塞。如果没有，请尝试通过 CAS 更新 state
+         *    并更新计数。注意，该步骤不检查可重入 acquire，它被推迟
+         *    在 fullTryAcquireShared 中，从而避免在更典型的
+         *    不可重入的场景下，检查持有计数。
+         * 3. 如果由于线程不符合条件或 CAS 失败或计数已经饱和，
+         *    则步骤 2 失败，然后将会进行 fullTryAcquireShared 方法。
          */
         Thread current = Thread.currentThread();
         int c = getState();
+        // 写锁数量不为 0，并且当前线程不为独占线程
+        // 这一步就是我们进行锁降级时，持有写锁然后去获取读锁的基础
         if (exclusiveCount(c) != 0 &&
                 getExclusiveOwnerThread() != current)
             return -1;
+        // 获取读锁数量
         int r = sharedCount(c);
+        // 判断读锁是否应该阻塞
         if (!readerShouldBlock() &&
+                // 判断当前是否溢出
                 r < MAX_COUNT &&
+                // CAS 尝试加锁
                 compareAndSetState(c, c + SHARED_UNIT)) {
+            // 加锁成功后，判断是否是首个获取读锁的线程
             if (r == 0) {
+                // 将 firstReader 和 firstReaderHoldCount 赋值
                 firstReader = current;
                 firstReaderHoldCount = 1;
+              // 当前线程是否是首个获取读锁的线程重入了
             } else if (firstReader == current) {
+                // 持有计数递增
                 firstReaderHoldCount++;
             } else {
+                // 非首个线程，判断自己是否是上次来访问 AQS 加锁的线程
                 HoldCounter rh = cachedHoldCounter;
+                // 当自己也不是上次加锁的线程，那只能从 threadLocal 中读取
                 if (rh == null || rh.tid != getThreadId(current))
+                    // 更新 rh 和 cachedHoldCounter，因为自己是最后一次获取
+                    // 读锁成功的线程
                     cachedHoldCounter = rh = readHolds.get();
                 else if (rh.count == 0)
+                    // 读锁数量为零，说明是同一个线程之前全部释放后，再次加锁
+                    // 由于当线程释放完后，会清空 threadLocal，但是并不会清理
+                    // cachedHoldCounter，所以，当同一个线程释放完，再次过来
+                    // 获取（中间没有其他线程过来加锁），那 cachedHoldCounter 持有的
+                    // 计数是仍然存在的，所以只需要将计数重新放回 threadLocal 即可
                     readHolds.set(rh);
+                // 持有计数递增
                 rh.count++;
             }
             return 1;
         }
+        // 需要阻塞，或读锁移除，或 CAS 失败
         return fullTryAcquireShared(current);
     }
 
     /**
-     * Full version of acquire for reads, that handles CAS misses
-     * and reentrant reads not dealt with in tryAcquireShared.
+     * 读锁进行 acquire 的完整版本，它处理 CAS 失败和在 tryAcquireShared
+     * 中未处理的重入获取
      */
     final int fullTryAcquireShared(Thread current) {
         /*
-         * This code is in part redundant with that in
-         * tryAcquireShared but is simpler overall by not
-         * complicating tryAcquireShared with interactions between
-         * retries and lazily reading hold counts.
+         * 此代码与 tryAcquireShared 中的代码部分冗余，但总体上更简单，
+         * 因为不会使 tryAcquireShared 与重试和延迟读取持有计数之间的交互
+         * 复杂化。
          */
         HoldCounter rh = null;
+        // 自旋加锁
         for (;;) {
             int c = getState();
+            // 独占锁数量不为零，则判断当前线程是否是独占线程，非独占则失败
             if (exclusiveCount(c) != 0) {
                 if (getExclusiveOwnerThread() != current)
                     return -1;
-                // else we hold the exclusive lock; blocking here
-                // would cause deadlock.
+                // 否则我们持有独占锁；如果我们在持有写锁的情况下，在这里阻塞会导致死锁。
+                // 所以我们直接放行
+              
+              // 下面判断没有线程持有写锁，排队的情况
             } else if (readerShouldBlock()) {
-                // Make sure we're not acquiring read lock reentrantly
+                // 在这里面说明我们获取 readLock 需要阻塞的，说明在我们之前可能有其他排队线程
+                // 确保我们没有以可重入的方式获取读锁
+                // 如果当前线程是已经获取过读锁，再次重入的，直接放行
                 if (firstReader == current) {
                     // assert firstReaderHoldCount > 0;
                 } else {
+                    // 到这里，我们不是首次获取读锁的
+                    // 首次自旋 rh 是 null，那需要给 rh 赋值
                     if (rh == null) {
+                        // 先给 rh 赋为 cachedHoldCounter，即假设我们是最后一个获取的
                         rh = cachedHoldCounter;
+                        // 如果 rh 为空，或者 rh 的线程并不是自己，则从 threadLocal 查找
                         if (rh == null || rh.tid != getThreadId(current)) {
+                            // 查找获取 threadLocal 的值，如果我们没有持有锁，是首次获取
+                            // 那这一步会导致 threadLocal 实例化 HoldCounter，实例化后
+                            // 的 count 为 0，由于我们需要阻塞，所以肯定是失败的，目的就是
+                            // 检查我们是不是重入，重入的话就成功，失败需要把 threadLocal
+                            // 值清理掉
                             rh = readHolds.get();
+                            // threadLocal 中的持有计数，如果为空，则移除 threadLocal
                             if (rh.count == 0)
                                 readHolds.remove();
                         }
                     }
+                    // 如果我们没有持有锁，并且需要阻塞，则失败
                     if (rh.count == 0)
                         return -1;
                 }
             }
+            // 如果限制持有锁数量达到最大，则失败
             if (sharedCount(c) == MAX_COUNT)
                 throw new Error("Maximum lock count exceeded");
+            // CAS 尝试加写锁
             if (compareAndSetState(c, c + SHARED_UNIT)) {
+                // 加锁成功，判断加锁前读锁数量是不是为 0，为 0 说明自己是第一个加锁的
                 if (sharedCount(c) == 0) {
+                    // 设置 firstReader 和 firstReaderHoldCount 主要为了提高性能
                     firstReader = current;
                     firstReaderHoldCount = 1;
+                // 不为零，判断当前线是否是 firstReader 重入
                 } else if (firstReader == current) {
+                    // 持有计数增加
                     firstReaderHoldCount++;
                 } else {
+                    // 如果非 firstReader，则获取 threadLocal 值
                     if (rh == null)
+                        // 先假设我们是最后一个加锁的
                         rh = cachedHoldCounter;
+                    // 如果我们不是最后一个加锁的，则从 threadLocal 查找
                     if (rh == null || rh.tid != getThreadId(current))
                         rh = readHolds.get();
+                    // 我们是最后一个加锁的，则设置一下 threadLocal，因为
+                    // 随时会有其他线程在加锁成功后将 cachedHoldCounter 更新掉，
+                    // 这时候我们的计数就丢失了
                     else if (rh.count == 0)
                         readHolds.set(rh);
+                    // 增加持有读锁计数
                     rh.count++;
+                    // 将自己更新为最后一个获取读锁的线程，缓存下来，提高性能
                     cachedHoldCounter = rh; // cache for release
                 }
                 return 1;
@@ -3581,53 +3629,67 @@ abstract static class Sync extends AbstractQueuedSynchronizer {
     }
 
     /**
-     * Performs tryLock for write, enabling barging in both modes.
-     * This is identical in effect to tryAcquire except for lack
-     * of calls to writerShouldBlock.
+     * 对写锁执行 tryLock，在两种策略（公平和非公平）下都会“闯入”。
+     * 这在效果上与 tryAcquire 相同，只是缺少对 writeShouldBlock
+     * 的调用。
      */
     final boolean tryWriteLock() {
         Thread current = Thread.currentThread();
         int c = getState();
+        // 说明有线程持有读/写锁
         if (c != 0) {
+            // 判断读锁数量是否为 0，为 0 说明有其他线程持有写锁，那我们肯定失败
+            // 不为 0，则判断当前线程是否是重入，非重入，则直接失败
             int w = exclusiveCount(c);
             if (w == 0 || current != getExclusiveOwnerThread())
                 return false;
             if (w == MAX_COUNT)
                 throw new Error("Maximum lock count exceeded");
         }
+        // CAS 加锁
         if (!compareAndSetState(c, c + 1))
             return false;
+        // 成功后更新独占线程
         setExclusiveOwnerThread(current);
         return true;
     }
 
     /**
-     * Performs tryLock for read, enabling barging in both modes.
-     * This is identical in effect to tryAcquireShared except for
-     * lack of calls to readerShouldBlock.
+     * 对读锁执行 tryLock，在两种策略下都会“闯入”。这在效果上与 
+     * tryAcquireShared 相同，只是缺少对 readerShouldBlock 的调用。
      */
     final boolean tryReadLock() {
         Thread current = Thread.currentThread();
+        // 自旋尝试获取读锁
         for (;;) {
             int c = getState();
+            // 独占锁数量不为空，并且当前线程不是独占线程，则直接失败
             if (exclusiveCount(c) != 0 &&
                     getExclusiveOwnerThread() != current)
                 return false;
+            // 获取写锁数量
             int r = sharedCount(c);
+            // 判断写锁数量是否已满
             if (r == MAX_COUNT)
                 throw new Error("Maximum lock count exceeded");
+            // CAS 尝试加锁
             if (compareAndSetState(c, c + SHARED_UNIT)) {
+                // 加锁成功，判断当前线程是不是首个获得读锁的
                 if (r == 0) {
+                    // 设置 firstReader 和 firstReaderCount
                     firstReader = current;
                     firstReaderHoldCount = 1;
+                // 读锁不为空，看看当前线程是否是 firstReader 重入，是的话直接增加计数
                 } else if (firstReader == current) {
                     firstReaderHoldCount++;
                 } else {
+                    // 先从缓存中找，如果不是，则从 threadLocal 找
                     HoldCounter rh = cachedHoldCounter;
                     if (rh == null || rh.tid != getThreadId(current))
                         cachedHoldCounter = rh = readHolds.get();
                     else if (rh.count == 0)
                         readHolds.set(rh);
+                    // 计数
                     rh.count++;
                 }
                 return true;
@@ -3635,6 +3697,7 @@ abstract static class Sync extends AbstractQueuedSynchronizer {
         }
     }
 
+    // 是否是独占线程
     protected final boolean isHeldExclusively() {
         // While we must in general read state before owner,
         // we don't need to do so to check if current thread is owner
@@ -3643,10 +3706,12 @@ abstract static class Sync extends AbstractQueuedSynchronizer {
 
     // Methods relayed to outer class
 
+    // 获取 condition
     final ConditionObject newCondition() {
         return new ConditionObject();
     }
 
+    // 获取独占线程
     final Thread getOwner() {
         // Must read state before owner to ensure memory consistency
         return ((exclusiveCount(getState()) == 0) ?
@@ -3654,26 +3719,32 @@ abstract static class Sync extends AbstractQueuedSynchronizer {
                 getExclusiveOwnerThread());
     }
 
+    // 获取读锁数量
     final int getReadLockCount() {
         return sharedCount(getState());
     }
 
+    // 写锁是否被占有
     final boolean isWriteLocked() {
         return exclusiveCount(getState()) != 0;
     }
 
+    // 获取当前线程持有的写锁数量
     final int getWriteHoldCount() {
         return isHeldExclusively() ? exclusiveCount(getState()) : 0;
     }
 
+    // 获取当前线程持有读锁数量
     final int getReadHoldCount() {
         if (getReadLockCount() == 0)
             return 0;
 
+        // 先从 firstReader 里面找
         Thread current = Thread.currentThread();
         if (firstReader == current)
             return firstReaderHoldCount;
 
+        // 再从 cachedHoldCounter 找，没有则从 threadLocal 找
         HoldCounter rh = cachedHoldCounter;
         if (rh != null && rh.tid == getThreadId(current))
             return rh.count;
@@ -3684,7 +3755,7 @@ abstract static class Sync extends AbstractQueuedSynchronizer {
     }
 
     /**
-     * Reconstitutes the instance from a stream (that is, deserializes it).
+     * 从流中读取对象（即反序列化）
      */
     private void readObject(java.io.ObjectInputStream s)
             throws java.io.IOException, ClassNotFoundException {
@@ -3693,7 +3764,1045 @@ abstract static class Sync extends AbstractQueuedSynchronizer {
         setState(0); // reset to unlocked state
     }
 
+    // 获取全部计数
     final int getCount() { return getState(); }
+}
+```
+
+#### 8.2.2 公平锁和非公平锁
+
+非公平锁：
+
+```java
+static final class NonfairSync extends Sync {
+    private static final long serialVersionUID = -8159625535654395037L;
+    final boolean writerShouldBlock() {
+        return false; // 非公平锁写入不需要阻塞
+    }
+    // 
+    final boolean readerShouldBlock() {
+        /* 作为避免写入线程饿死的启发式方法，如果队列头部暂时显示为写入线程，则阻塞。
+         * 这只是一种概率效应，引入如果在写入线程之前有其他读取线程没有超时，则
+         * 读取线程不会阻塞。
+         */
+        // 判断队列头部线程是否是独占线程
+        return apparentlyFirstQueuedIsExclusive();
+    }
+}
+```
+
+公平锁：
+
+```java
+static final class FairSync extends Sync {
+    private static final long serialVersionUID = -2274990926593161451L;
+    final boolean writerShouldBlock() {
+        return hasQueuedPredecessors();
+    }
+    final boolean readerShouldBlock() {
+        return hasQueuedPredecessors();
+    }
+}
+```
+
+#### 8.2.3 读锁和写锁
+
+##### 8.2.3.1  ReadLock
+
+```java
+public static class ReadLock implements Lock, java.io.Serializable {
+    private static final long serialVersionUID = -5992448646407690164L;
+    private final Sync sync;
+
+    /**
+     * 子类使用的构造器
+     *
+     * 参数：lock - 外部锁对象
+     * 参数：NullPointerException - 如果 lock 为空
+     */
+    protected ReadLock(ReentrantReadWriteLock lock) {
+        sync = lock.sync;
+    }
+
+    /**
+     * 获取读锁。
+     *
+     * 如果写锁没有被另一个线程持有，则获取读锁并立即返回。
+     *
+     * 如果写锁被另一个线程持有，那么当前线程处于调度目的将被禁用并处于休眠状态，
+     * 直到获得读锁为止。
+     */
+    public void lock() {
+        sync.acquireShared(1);
+    }
+
+    /**
+     * 获取读锁，线程中断则终止。
+     *
+     * 如果写锁没有被另一个线程持有，则获取读锁并立即返回。
+     *
+     * 如果写锁被另一个线程持有，那么出于调度的目的，该线程将被禁用并
+     * 进入休眠状态，直到发生以下两种状态之一：
+     * - 该线程获取到读锁；或者
+     * - 其他一些线程中断当前线程。
+     *
+     * 如果当前线程：
+     * - 进入此方法时设置中断状态；或者
+     * - 在线程获取读锁时被中断。
+     *
+     * 然后抛出InterruptedException并清除当前线程的中断状态。
+     *
+     * 在此实现中，由于此方法明显表示出中断能力，因此优先响应中断而不是
+     * 正常执行或可重入获取锁。
+     *
+     * @throws InterruptedException - 如果当前线程被中断
+     */
+    public void lockInterruptibly() throws InterruptedException {
+        sync.acquireSharedInterruptibly(1);
+    }
+
+    /**
+     * 仅当调用时另一个线程未持有写锁时才获取锁。
+     *
+     * 如果写锁没有被另一个线程持有，则获取读锁，并返回 true。即使此锁已设置为
+     * 使用公平排序策略，调用 tryLock() 将立即获取读锁（如果可用），无论其他
+     * 线程当前是否正在等待。这种“闯入”行为在某些情况下可能很有用，即便它会破坏
+     * 公平性。如果您想要要求此锁保证公平性设置，请使用与此几乎等效的 
+     * tryLock(0, TimeUnit.SECONDS)（它也会检测线程中断）。
+     *
+     * 如果写锁被另一个线程持有，则此方法立即返回 false。
+     *
+     * 返回：如果获得了锁，则返回 true
+     */
+    public boolean tryLock() {
+        return sync.tryReadLock();
+    }
+
+    /**
+     * 如果在给定的等待时间内获取写锁没有超时、或当前线程没有中断，则获取读锁。
+     *
+     * 如果写锁没有被另一个线程持有，则获取读锁，并返回 true。如果此锁已设置为
+     * 使用公平排序策略，则在此线程之前有任何其他线程等待锁，则不会获取锁。这与
+     * tryLock() 方法形成对比。如果你想要一个允许 “闯入” 公平锁的可超时 tryLock
+     * ，则可以将超时和非超时方法相结合使用：
+     *
+     * if (lock.tryLock() ||
+     *     lock.tryLock(timeout, unit)) {
+     *   ...
+     * }
+     *
+     * 如果写锁被另一个线程持有，那么出于调度的目的，该线程将被禁用并
+     * 进入休眠状态，直到发生以下三种状态之一：
+     * - 该线程获取到读锁；或者
+     * - 其他一些线程中断当前线程；或者
+     * - 超过指定的等待时间。
+     *
+     * 如果当前线程：
+     * - 进入此方法时设置中断状态；或者
+     * - 在线程获取读锁时被中断。
+     *
+     * 然后抛出InterruptedException并清除当前线程的中断状态。
+     *
+     * 在此实现中，由于此方法明显表示出中断能力，因此优先响应中断而不是
+     * 正常执行或可重入获取锁，以及报告等待超时。
+     *
+     * 参数：timeout - 等待读锁的时间
+     *      unit - timeout 参数的时间单位
+     * 返回：如果获得了读锁，则为 true
+     * @throws InterruptedException - 如果当前线程被中断
+     * @throws NullPointerException - 如果时间单位为空
+     */
+    public boolean tryLock(long timeout, TimeUnit unit)
+            throws InterruptedException {
+        return sync.tryAcquireSharedNanos(1, unit.toNanos(timeout));
+    }
+
+    /**
+     * 尝试释放此锁。
+     *
+     * 如果读锁的数量为零，则写锁可以尝试获取。
+     */
+    public void unlock() {
+        sync.releaseShared(1);
+    }
+
+    /**
+     * 抛出 UnsupportedOperationException，因为 ReadLock 不支持 Cindition。
+     *
+     * @throws UnsupportedOperationException 总是
+     */
+    public Condition newCondition() {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * 返回标识此锁的字符串及其锁状态。括号中的状态包括字符串"Read locks =" ，后跟持有的读锁数。
+     *
+     * 返回：一个标识这个锁的字符串，以及它的锁状态
+     */
+    public String toString() {
+        int r = sync.getReadLockCount();
+        return super.toString() +
+                "[Read locks = " + r + "]";
+    }
+}
+```
+
+##### 8.2.3.2 WriteLock
+
+```java
+public static class WriteLock implements Lock, java.io.Serializable {
+    private static final long serialVersionUID = -4992448646407690164L;
+    private final Sync sync;
+
+    /**
+     * 子类使用的构造器
+     *
+     * 参数：lock - 外部锁对象
+     * 参数：NullPointerException - 如果 lock 为空
+     */
+    protected WriteLock(ReentrantReadWriteLock lock) {
+        sync = lock.sync;
+    }
+
+    /**
+     * 获取写锁。
+     * 
+     * 如果其他线程既没有持有读锁也没有持有写锁，则获取写锁并立即返回，将写锁持有
+     * 计数设置为 1。
+     * 
+     * 如果当前线程已经持有写锁，则持有计数加一并立即返回。
+     *
+     * 如果锁被另一个线程持有，那么当前线程处于调度目的将被禁用并处于休眠状态，
+     * 直到获得写锁为止，此时写锁持有计数设置为 1。
+     */
+    public void lock() {
+        sync.acquire(1);
+    }
+
+    /**
+     * 获取写锁，线程中断则终止。
+     *
+     * 如果其他线程既没有持有读锁也没有持有写锁，则获取写锁并立即返回，
+     * 将写锁持有计数设置为 1。
+     *
+     * 如果当前线程已经持有写锁，则持有计数加一并立即返回。
+     *
+     * 如果锁被另一个线程持有，那么出于调度的目的，该线程将被禁用并
+     * 进入休眠状态，直到发生以下两种情况之一：
+     * - 该线程获取到写锁；或者
+     * - 其他一些线程中断当前线程。
+     *
+     * 如果当前线程获取到了写锁，则锁持有计数设置为 1。
+     *
+     * 如果当前线程：
+     * - 进入此方法时设置中断状态；或者
+     * - 在线程获取读锁时被中断。
+     *
+     * 然后抛出InterruptedException并清除当前线程的中断状态。
+     *
+     * 在此实现中，由于此方法明显表示出中断能力，因此优先响应中断而不是
+     * 正常执行或可重入获取锁。
+     *
+     * @throws InterruptedException - 如果当前线程被中断
+     */
+    public void lockInterruptibly() throws InterruptedException {
+        sync.acquireInterruptibly(1);
+    }
+
+    /**
+     * 仅当调用时没有其他线程未持有锁时才获取写锁。
+     *
+     * 如果其他线程既没有持有读锁也没有持有写锁，则获取写锁并立即返回，将写锁持有
+     * 计数设置为 1。即使此锁已设置为使用公平排序策略，调用 tryLock() 将立即获
+     * 取该锁（如果可用），无论其他线程当前是否正在等待。这种“闯入”行为在某些情况
+     * 下可能很有用，即便它会破坏公平性。如果您想要要求此锁保证公平性设置，请使用
+     * 与此几乎等效的  tryLock(0, TimeUnit.SECONDS)（它也会检测线程中断）。
+     *
+     * 如果当前线程已经持有写锁，则持有计数加一并立即返回。
+     * 
+     * 如果锁被另一个线程持有，则此方法立即返回 false。
+     *
+     * 返回：如果获得了锁，则返回 true
+     */
+    public boolean tryLock( ) {
+        return sync.tryWriteLock();
+    }
+
+    /**
+     *
+     * 如果在给定的等待时间内获取锁没有超时、或当前线程没有中断，则获取读锁。
+     *
+     * 如果其他线程既没有持有读锁也没有持有写锁，则获取写锁并立即返回，将写锁持有
+     * 计数设置为 1。如果此锁已设置为使用公平排序策略，则在此线程之前有任何其他
+     * 线程等待锁，则不会获取锁。这与 tryLock() 方法形成对比。如果你想要一个
+     * 允许 “闯入” 公平锁的可超时 tryLock，则可以将超时和非超时方法相结合使用：
+     *
+     * if (lock.tryLock() ||
+     *     lock.tryLock(timeout, unit)) {
+     *   ...
+     * }
+     *
+     * 如果当前线程已经持有写锁，则持有计数加一并立即返回。
+     * 
+     * 如果锁被另一个线程持有，那么出于调度的目的，该线程将被禁用并
+     * 进入休眠状态，直到发生以下三种状态之一：
+     * - 该线程获取到读锁；或者
+     * - 其他一些线程中断当前线程；或者
+     * - 超过指定的等待时间。
+     *
+     * 如果当前线程获取到了写锁，则锁持有计数设置为 1。
+     *
+     * 如果当前线程：
+     * - 进入此方法时设置中断状态；或者
+     * - 在线程获取读锁时被中断。
+     *
+     * 然后抛出InterruptedException并清除当前线程的中断状态。
+     *
+     * 在此实现中，由于此方法明显表示出中断能力，因此优先响应中断而不是
+     * 正常执行或可重入获取锁，以及报告等待超时。
+     *
+     * 参数：timeout - 等待读锁的时间
+     *      unit - timeout 参数的时间单位
+     * 返回：如果获得了读锁，则为 true
+     * @throws InterruptedException - 如果当前线程被中断
+     * @throws NullPointerException - 如果时间单位为空
+     */
+    public boolean tryLock(long timeout, TimeUnit unit)
+            throws InterruptedException {
+        return sync.tryAcquireNanos(1, unit.toNanos(timeout));
+    }
+
+    /**
+     * 尝试释放此锁。
+     *
+     * 如果当前线程是这个锁的持有者，那么持有计数就会递减。如果持有计数为零，
+     * 则释放锁。如果当前线不是该锁的持有者，则抛出 IllegalMonitorStateException。
+     *
+     * @throws IllegalMonitorStateException - 如果当前线程没有持有该锁
+     */
+    public void unlock() {
+        sync.release(1);
+    }
+
+    /**
+     * 返回与此 Lock 实例一起使用的 Condition 实例。
+     *
+     * 当与内置监视器锁一起使用时，返回的 Condition 实例支持与 Object 监视器
+     * 方法（wait、notify 和 notifyAll）相同的用法。
+     *
+     * - 如果在调用任何 Condition 方法时未持有此锁的写锁，则会抛出 
+     *   IllegalMonitorStateException。（写锁和读锁持有是独立的，因此不会被
+     *   检查或影响。但是，当前线程在持有写锁时，又获取读锁，同时调用条件等待方法本质上
+     *   是错误的，因为其他可以解除阻塞的线程无法获取写锁。）
+     * - 当 condition await 方法被调用时，写锁将被释放，在它们返回之前，写锁
+     *   将被重新获得，所持有计数恢复到调用方法时的状态。
+     * - 如果线程在等待过程中被中断，则等待将终止，将抛出 InterruptedException，
+     *   并清除线程的中断状态。
+     * - 等待线程以 FIFO 顺序 signal。
+     * - 从 await 方法返回的线程重新获取锁的顺序与最初获取锁的线程顺序相同，在默认情况下
+     *   未指定，但对于公平锁，会优先考虑哪些等待时间最长的线程。
+     *
+     * 返回：condition 对象
+     */
+    public Condition newCondition() {
+        return sync.newCondition();
+    }
+
+    /**
+     * 返回标识此锁的字符串及其锁状态。括号中的状态包括字符串"Unlocked"或
+     * 字符串"Locked by"后跟拥有线程的名称。
+     *
+     * 返回：一个标识这个锁的字符串，以及它的锁状态
+     */
+    public String toString() {
+        Thread o = sync.getOwner();
+        return super.toString() + ((o == null) ?
+                "[Unlocked]" :
+                "[Locked by thread " + o.getName() + "]");
+    }
+
+    /**
+     * 查询当前线程是否持有该写锁。与 ReentrantReadWriteLock#isWriteLockedByCurrentThread 
+     * 效果相同。
+     *
+     * 返回：如果当前线程持有此锁，则为true；否则为 false。
+     * @since 1.6
+     */
+    public boolean isHeldByCurrentThread() {
+        return sync.isHeldExclusively();
+    }
+
+    /**
+     * 查询当前线程持有该写锁的次数。对于解锁操作不匹配的每个锁定操作，
+     * 线程都持有一个锁。与 ReentrantReadWriteLock#getWriteHoldCount 的效果相同。
+     *
+     * 返回：当前线程持有此锁的次数，如果当前线程未持有此锁，则为零
+     * @since 1.6
+     */
+    public int getHoldCount() {
+        return sync.getWriteHoldCount();
+    }
+}
+```
+
+#### 8.2.3 其他方法
+
+下面我们看一下 `ReentrantReadWriteLock` 中使用的线程 id 如何获取：
+
+```java
+/**
+ * 返回给定线程的 thread ID。我们必须直接访问它，因为通过方法 Thread.getId() 返回的
+ * 并不是最终的，并且已知会以不保留唯一映射的方式被覆盖。
+ */
+static final long getThreadId(Thread thread) {
+    return UNSAFE.getLongVolatile(thread, TID_OFFSET);
+}
+
+// Unsafe mechanics
+private static final sun.misc.Unsafe UNSAFE;
+private static final long TID_OFFSET;
+static {
+    try {
+        UNSAFE = sun.misc.Unsafe.getUnsafe();
+        Class<?> tk = Thread.class;
+        TID_OFFSET = UNSAFE.objectFieldOffset
+                (tk.getDeclaredField("tid"));
+    } catch (Exception e) {
+        throw new Error(e);
+    }
+}
+```
+
+其他一些关于 ReentrantReadWriteLock 的基础监控方法，这里不在做描述。
+
+### 8.3 Samphora
+
+计数信号量。从概念上讲，信号量维护一组 permit（许可）。如果需要，每个 `acquire` 都会阻塞，直到 permit 可用，然后获得它。每个 `release` 都会添加一个 permit，可能会释放一个阻塞的获取者。但是，没有使用实际的 permit 对象；`Semaphore` 只是对可用数量进行计数并采取相应的措施。
+
+`Semaphore` 通常用于限制可以访问某些（物理或逻辑）资源的线程数。例如，这是一个使用 `Semaphore` 来控制对资源池访问的类：
+
+```java
+class Pool {
+  private static final int MAX_AVAILABLE = 100;
+  private final Semaphore available = new Semaphore(MAX_AVAILABLE, true);
+  
+  public Object getItem() throws InterruptedException {
+    available.acquire();
+    return getNextAvailableItem();
+  }
+  
+  public void putItem(Object x) {
+    if (markAsUnused(x)) {
+      available.release();
+    }
+  }
+  
+  // Not a particularly efficient data structure; just for demo
+  
+  protected Object[] items = ... whatever kinds of items being managed
+  protected boolean[] used = new boolean[MAX_AVAILABLE];
+  
+  protected synchronized Object getNextAvailableItem(){
+    for (int i = 0; i < MAX_AVAILABLE; ++i) {
+      if (!used[i]) {
+        used[i] = true;
+        return items[i];
+      }
+    }
+    return null;// not reached
+  }
+  
+  protected synchronized boolean markAsUnused(Object item) {
+    for (int i = 0; i < MAX_AVAILABLE; ++i) {
+      if (item == items[i]) {
+        if (used[i]) {
+          used[i] = false;
+          return true;
+        } else {
+          return false;
+        }
+      }
+    }
+    return false;
+  }
+}
+```
+
+在获取一个 item 之前，每个线程必须从 `Semaphore` 中获得一个 permit，保证一个 item 可供使用。当线程处理完该 tiem 时，它被返回到池中，一个 permit 返回给 `Semaphore`，允许另一个线程获取该 item。请注意，当调用 `acquire` 时，不会持有同步锁，因为这将阻塞 item 返回池中。`Semaphore` 封装了限制对池的访问所需的同步，与维护池本身的一致性所需的同步是分开的。
+
+初始化为 1 的 `Semaphore`，使用时最多只有一个 permit 可用，可以作为互斥锁。这通常称为二进制信号量（binary semaphore），因为它只有两种状态：1 个 permit 可用，或 0 个 permit 可用。当以这种方式使用时，二进制信号量具有这样的属性（与许多 `java.util.concurrent.locks.Lock` 实现不同），即 “锁” 可以由所有者以外的线程释放（因为信号量没有所有权的概念）。这在一些专门的上下文中很有用，比如死锁恢复。
+
+此类的构造函数可以选择接受一个 *公平* 参数。当设置为 false 时，此类不保证线程获取 permit 的顺序。特别是，允许“闯入”，也就是说，调用 `acquire` 的线程可以在一个一直等待的线程之前被允许分配一个 permit —— 从逻辑上来说，就是新线程将自己置于等待队列的头部。当 `fairness` 设置为 true时，信号量保证调用任何 `acquire` 方法的线程会按照这些线程被 `acquire` 方法处理的顺序获得 permit（先进先出；FIFO）。请注意，FIFO 排序必然适用于这些方法中的特定内部执行点。因此，一个线程可以在另一个线程之前调用 `acquire`，但在另一个线程之后到达排序点，并且从方法返回时类似。另外请注意，没有超时参数的 `tryAcquire` 方法不遵循公平设置，会直接获取任何可用的 permit。
+
+通常，用于控制资源访问的信号量应该被初始化公平的，以确保没有线程因访问资源而被饿死。当使用信号量进行其他类型的同步控制时，非公平排序的吞吐量优势通常超过公平性考虑。
+
+该类还提供了一次获取和释放多个 permit 的方便方法。当使用这些方法且不设置公平性时，要注意线程有无限延迟被饿死的风险会增加。
+
+内存一致性影响：线程中调用“释放”方法（比如 `release()`）之前的操作 happen-before 另一线程中紧跟在成功的“获取”方法（比如 acquire()）之后的操作。
+
+#### 8.3.1 Sync
+
+信号量的同步实现。使用 `AQS` 的 `state` 来表示 permit。分为公平和非公平版本。
+
+```java
+abstract static class Sync extends AbstractQueuedSynchronizer {
+    private static final long serialVersionUID = 1192457210091910933L;
+
+    Sync(int permits) {
+        setState(permits);
+    }
+
+    final int getPermits() {
+        return getState();
+    }
+
+    // 非公平尝试获取资源，注意此方法会自旋直到获取成功，或可用资源不够用，直接返回相减后的数量
+    final int nonfairTryAcquireShared(int acquires) {
+        // 自旋获取 permit
+        for (;;) {
+            // 获取当前可用的 permit 数量
+            int available = getState();
+            // 获取后的剩余数量
+            int remaining = available - acquires;
+            // remaining 大于等于 0 时，尝试 CAS 获取，成功则直接返回
+            if (remaining < 0 ||
+                    compareAndSetState(available, remaining))
+                return remaining;
+        }
+    }
+
+    // 归还资源，同样，此方法会自旋直至成功
+    protected final boolean tryReleaseShared(int releases) {
+        // 自旋释放 permit
+        for (;;) {
+            // 获取当前的 permit 数量
+            int current = getState();
+            // 归还 permit
+            int next = current + releases;
+            // 判断归还后是否溢出
+            if (next < current) // overflow
+                throw new Error("Maximum permit count exceeded");
+            // CAS 归还
+            if (compareAndSetState(current, next))
+                return true;
+        }
+    }
+
+    // 获取资源，注意此方法在 CAS 修改后直接返回。
+    // 此方法在使用信号量来跟踪那些变为不可用资源的子类中很有用。
+    // 此方法与 acquire 的不同之处在于它不会阻塞，等待 permit 可用。
+    final void reducePermits(int reductions) {
+        // 自旋减少 permit 
+        for (;;) {
+            int current = getState();
+            int next = current - reductions;
+            if (next > current) // underflow
+                throw new Error("Permit count underflow");
+            if (compareAndSetState(current, next))
+                return;
+        }
+    }
+
+    // 获取全部可用资源
+    final int drainPermits() {
+        for (;;) {
+            int current = getState();
+            if (current == 0 || compareAndSetState(current, 0))
+                return current;
+        }
+    }
+}
+```
+
+#### 8.3.2 公平和非公平
+
+非公平版：
+
+```java
+static final class NonfairSync extends Semaphore.Sync {
+    private static final long serialVersionUID = -2694183684443567898L;
+
+    NonfairSync(int permits) {
+        super(permits);
+    }
+
+    protected int tryAcquireShared(int acquires) {
+        return nonfairTryAcquireShared(acquires);
+    }
+}
+```
+
+公平版：
+
+```java
+static final class FairSync extends Sync {
+    private static final long serialVersionUID = 2014338818796000944L;
+
+    FairSync(int permits) {
+        super(permits);
+    }
+
+    // 返回负数说明资源不够用
+    protected int tryAcquireShared(int acquires) {
+        // 自旋获取资源
+        for (;;) {
+            // 先判断队列中是否有等待阻塞的前驱节点
+            if (hasQueuedPredecessors())
+                return -1;
+            int available = getState();
+            int remaining = available - acquires;
+            if (remaining < 0 ||
+                    compareAndSetState(available, remaining))
+                return remaining;
+        }
+    }
+}
+```
+
+#### 8.3.3 acquire & release
+
+```java
+public class Semaphore implements java.io.Serializable {
+    private static final long serialVersionUID = -3222578661600680210L;
+    /** All mechanics via AbstractQueuedSynchronizer subclass */
+    private final Sync sync;
+
+    /**
+     * 使用给定数量的 permit 创建信号量，并设置为非公平。
+     *
+     * 参数：permits - 可用的 permit 的初始数量。该值可能为负数，在
+     *                这种情况下，必须在任何 acquire 之前进行 release。
+     */
+    public Semaphore(int permits) {
+        sync = new NonfairSync(permits);
+    }
+
+    /**
+     * 创建具有给定 permit 数量和给定公平设置的 Semaphore 。
+     *
+     * 参数：permits - 可用的 permit 的初始数量。该值可能为负数，在
+     *                这种情况下，必须在任何 acquire 之前进行 release。
+     *      fair - 此信号量保证竞争 permit 的 acquire 为先进先出，则为 true；否则为 false
+     */
+    public Semaphore(int permits, boolean fair) {
+        sync = fair ? new FairSync(permits) : new NonfairSync(permits);
+    }
+
+    /**
+     * 从信号量获取一个 permit，阻塞直到获取一个可用，线程被中断则终止。
+     * 
+     * 获得一个 permit，如果有可用则立即返回，并将可用 permit 数量减一。
+     *
+     * 如果没有可用的 permit，则处于线程调度目的，当前线程将被禁用并处于休眠状态，直到
+     * 发生以下两种情况下之一：
+     * - 其他一些线程调用此信号量的 release 方法，并且当前线接下来获得一个 permit；或者
+     * - 其他线程中断当前线程。
+     *
+     * 如果当前线程：
+     * - 在进入此方法时设置其中断状态；或者
+     * - 在等待过程中被中断。
+     *
+     * 然后抛出InterruptedException并清除当前线程的中断状态。
+     *
+     * @throws InterruptedException - 如果当前线程被中断。
+     */
+    public void acquire() throws InterruptedException {
+        sync.acquireSharedInterruptibly(1);
+    }
+
+    /**
+     * Acquires a permit from this semaphore, blocking until one is
+     * available.
+     *
+     * <p>Acquires a permit, if one is available and returns immediately,
+     * reducing the number of available permits by one.
+     *
+     * <p>If no permit is available then the current thread becomes
+     * disabled for thread scheduling purposes and lies dormant until
+     * some other thread invokes the {@link #release} method for this
+     * semaphore and the current thread is next to be assigned a permit.
+     *
+     * <p>If the current thread is {@linkplain Thread#interrupt interrupted}
+     * while waiting for a permit then it will continue to wait, but the
+     * time at which the thread is assigned a permit may change compared to
+     * the time it would have received the permit had no interruption
+     * occurred.  When the thread does return from this method its interrupt
+     * status will be set.
+     */
+    public void acquireUninterruptibly() {
+        sync.acquireShared(1);
+    }
+
+    /**
+     * Acquires a permit from this semaphore, only if one is available at the
+     * time of invocation.
+     *
+     * <p>Acquires a permit, if one is available and returns immediately,
+     * with the value {@code true},
+     * reducing the number of available permits by one.
+     *
+     * <p>If no permit is available then this method will return
+     * immediately with the value {@code false}.
+     *
+     * <p>Even when this semaphore has been set to use a
+     * fair ordering policy, a call to {@code tryAcquire()} <em>will</em>
+     * immediately acquire a permit if one is available, whether or not
+     * other threads are currently waiting.
+     * This &quot;barging&quot; behavior can be useful in certain
+     * circumstances, even though it breaks fairness. If you want to honor
+     * the fairness setting, then use
+     * {@link #tryAcquire(long, TimeUnit) tryAcquire(0, TimeUnit.SECONDS) }
+     * which is almost equivalent (it also detects interruption).
+     *
+     * @return {@code true} if a permit was acquired and {@code false}
+     *         otherwise
+     */
+    public boolean tryAcquire() {
+        return sync.nonfairTryAcquireShared(1) >= 0;
+    }
+
+    /**
+     * Acquires a permit from this semaphore, if one becomes available
+     * within the given waiting time and the current thread has not
+     * been {@linkplain Thread#interrupt interrupted}.
+     *
+     * <p>Acquires a permit, if one is available and returns immediately,
+     * with the value {@code true},
+     * reducing the number of available permits by one.
+     *
+     * <p>If no permit is available then the current thread becomes
+     * disabled for thread scheduling purposes and lies dormant until
+     * one of three things happens:
+     * <ul>
+     * <li>Some other thread invokes the {@link #release} method for this
+     * semaphore and the current thread is next to be assigned a permit; or
+     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
+     * the current thread; or
+     * <li>The specified waiting time elapses.
+     * </ul>
+     *
+     * <p>If a permit is acquired then the value {@code true} is returned.
+     *
+     * <p>If the current thread:
+     * <ul>
+     * <li>has its interrupted status set on entry to this method; or
+     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
+     * to acquire a permit,
+     * </ul>
+     * then {@link InterruptedException} is thrown and the current thread's
+     * interrupted status is cleared.
+     *
+     * <p>If the specified waiting time elapses then the value {@code false}
+     * is returned.  If the time is less than or equal to zero, the method
+     * will not wait at all.
+     *
+     * @param timeout the maximum time to wait for a permit
+     * @param unit the time unit of the {@code timeout} argument
+     * @return {@code true} if a permit was acquired and {@code false}
+     *         if the waiting time elapsed before a permit was acquired
+     * @throws InterruptedException if the current thread is interrupted
+     */
+    public boolean tryAcquire(long timeout, TimeUnit unit)
+            throws InterruptedException {
+        return sync.tryAcquireSharedNanos(1, unit.toNanos(timeout));
+    }
+
+    /**
+     * Releases a permit, returning it to the semaphore.
+     *
+     * <p>Releases a permit, increasing the number of available permits by
+     * one.  If any threads are trying to acquire a permit, then one is
+     * selected and given the permit that was just released.  That thread
+     * is (re)enabled for thread scheduling purposes.
+     *
+     * <p>There is no requirement that a thread that releases a permit must
+     * have acquired that permit by calling {@link #acquire}.
+     * Correct usage of a semaphore is established by programming convention
+     * in the application.
+     */
+    public void release() {
+        sync.releaseShared(1);
+    }
+
+    /**
+     * Acquires the given number of permits from this semaphore,
+     * blocking until all are available,
+     * or the thread is {@linkplain Thread#interrupt interrupted}.
+     *
+     * <p>Acquires the given number of permits, if they are available,
+     * and returns immediately, reducing the number of available permits
+     * by the given amount.
+     *
+     * <p>If insufficient permits are available then the current thread becomes
+     * disabled for thread scheduling purposes and lies dormant until
+     * one of two things happens:
+     * <ul>
+     * <li>Some other thread invokes one of the {@link #release() release}
+     * methods for this semaphore, the current thread is next to be assigned
+     * permits and the number of available permits satisfies this request; or
+     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
+     * the current thread.
+     * </ul>
+     *
+     * <p>If the current thread:
+     * <ul>
+     * <li>has its interrupted status set on entry to this method; or
+     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
+     * for a permit,
+     * </ul>
+     * then {@link InterruptedException} is thrown and the current thread's
+     * interrupted status is cleared.
+     * Any permits that were to be assigned to this thread are instead
+     * assigned to other threads trying to acquire permits, as if
+     * permits had been made available by a call to {@link #release()}.
+     *
+     * @param permits the number of permits to acquire
+     * @throws InterruptedException if the current thread is interrupted
+     * @throws IllegalArgumentException if {@code permits} is negative
+     */
+    public void acquire(int permits) throws InterruptedException {
+        if (permits < 0) throw new IllegalArgumentException();
+        sync.acquireSharedInterruptibly(permits);
+    }
+
+    /**
+     * Acquires the given number of permits from this semaphore,
+     * blocking until all are available.
+     *
+     * <p>Acquires the given number of permits, if they are available,
+     * and returns immediately, reducing the number of available permits
+     * by the given amount.
+     *
+     * <p>If insufficient permits are available then the current thread becomes
+     * disabled for thread scheduling purposes and lies dormant until
+     * some other thread invokes one of the {@link #release() release}
+     * methods for this semaphore, the current thread is next to be assigned
+     * permits and the number of available permits satisfies this request.
+     *
+     * <p>If the current thread is {@linkplain Thread#interrupt interrupted}
+     * while waiting for permits then it will continue to wait and its
+     * position in the queue is not affected.  When the thread does return
+     * from this method its interrupt status will be set.
+     *
+     * @param permits the number of permits to acquire
+     * @throws IllegalArgumentException if {@code permits} is negative
+     */
+    public void acquireUninterruptibly(int permits) {
+        if (permits < 0) throw new IllegalArgumentException();
+        sync.acquireShared(permits);
+    }
+
+    /**
+     * Acquires the given number of permits from this semaphore, only
+     * if all are available at the time of invocation.
+     *
+     * <p>Acquires the given number of permits, if they are available, and
+     * returns immediately, with the value {@code true},
+     * reducing the number of available permits by the given amount.
+     *
+     * <p>If insufficient permits are available then this method will return
+     * immediately with the value {@code false} and the number of available
+     * permits is unchanged.
+     *
+     * <p>Even when this semaphore has been set to use a fair ordering
+     * policy, a call to {@code tryAcquire} <em>will</em>
+     * immediately acquire a permit if one is available, whether or
+     * not other threads are currently waiting.  This
+     * &quot;barging&quot; behavior can be useful in certain
+     * circumstances, even though it breaks fairness. If you want to
+     * honor the fairness setting, then use {@link #tryAcquire(int,
+     * long, TimeUnit) tryAcquire(permits, 0, TimeUnit.SECONDS) }
+     * which is almost equivalent (it also detects interruption).
+     *
+     * @param permits the number of permits to acquire
+     * @return {@code true} if the permits were acquired and
+     *         {@code false} otherwise
+     * @throws IllegalArgumentException if {@code permits} is negative
+     */
+    public boolean tryAcquire(int permits) {
+        if (permits < 0) throw new IllegalArgumentException();
+        return sync.nonfairTryAcquireShared(permits) >= 0;
+    }
+
+    /**
+     * Acquires the given number of permits from this semaphore, if all
+     * become available within the given waiting time and the current
+     * thread has not been {@linkplain Thread#interrupt interrupted}.
+     *
+     * <p>Acquires the given number of permits, if they are available and
+     * returns immediately, with the value {@code true},
+     * reducing the number of available permits by the given amount.
+     *
+     * <p>If insufficient permits are available then
+     * the current thread becomes disabled for thread scheduling
+     * purposes and lies dormant until one of three things happens:
+     * <ul>
+     * <li>Some other thread invokes one of the {@link #release() release}
+     * methods for this semaphore, the current thread is next to be assigned
+     * permits and the number of available permits satisfies this request; or
+     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
+     * the current thread; or
+     * <li>The specified waiting time elapses.
+     * </ul>
+     *
+     * <p>If the permits are acquired then the value {@code true} is returned.
+     *
+     * <p>If the current thread:
+     * <ul>
+     * <li>has its interrupted status set on entry to this method; or
+     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
+     * to acquire the permits,
+     * </ul>
+     * then {@link InterruptedException} is thrown and the current thread's
+     * interrupted status is cleared.
+     * Any permits that were to be assigned to this thread, are instead
+     * assigned to other threads trying to acquire permits, as if
+     * the permits had been made available by a call to {@link #release()}.
+     *
+     * <p>If the specified waiting time elapses then the value {@code false}
+     * is returned.  If the time is less than or equal to zero, the method
+     * will not wait at all.  Any permits that were to be assigned to this
+     * thread, are instead assigned to other threads trying to acquire
+     * permits, as if the permits had been made available by a call to
+     * {@link #release()}.
+     *
+     * @param permits the number of permits to acquire
+     * @param timeout the maximum time to wait for the permits
+     * @param unit the time unit of the {@code timeout} argument
+     * @return {@code true} if all permits were acquired and {@code false}
+     *         if the waiting time elapsed before all permits were acquired
+     * @throws InterruptedException if the current thread is interrupted
+     * @throws IllegalArgumentException if {@code permits} is negative
+     */
+    public boolean tryAcquire(int permits, long timeout, TimeUnit unit)
+            throws InterruptedException {
+        if (permits < 0) throw new IllegalArgumentException();
+        return sync.tryAcquireSharedNanos(permits, unit.toNanos(timeout));
+    }
+
+    /**
+     * Releases the given number of permits, returning them to the semaphore.
+     *
+     * <p>Releases the given number of permits, increasing the number of
+     * available permits by that amount.
+     * If any threads are trying to acquire permits, then one
+     * is selected and given the permits that were just released.
+     * If the number of available permits satisfies that thread's request
+     * then that thread is (re)enabled for thread scheduling purposes;
+     * otherwise the thread will wait until sufficient permits are available.
+     * If there are still permits available
+     * after this thread's request has been satisfied, then those permits
+     * are assigned in turn to other threads trying to acquire permits.
+     *
+     * <p>There is no requirement that a thread that releases a permit must
+     * have acquired that permit by calling {@link java.util.concurrent.Semaphore#acquire acquire}.
+     * Correct usage of a semaphore is established by programming convention
+     * in the application.
+     *
+     * @param permits the number of permits to release
+     * @throws IllegalArgumentException if {@code permits} is negative
+     */
+    public void release(int permits) {
+        if (permits < 0) throw new IllegalArgumentException();
+        sync.releaseShared(permits);
+    }
+
+    /**
+     * Returns the current number of permits available in this semaphore.
+     *
+     * <p>This method is typically used for debugging and testing purposes.
+     *
+     * @return the number of permits available in this semaphore
+     */
+    public int availablePermits() {
+        return sync.getPermits();
+    }
+
+    /**
+     * Acquires and returns all permits that are immediately available.
+     *
+     * @return the number of permits acquired
+     */
+    public int drainPermits() {
+        return sync.drainPermits();
+    }
+
+    /**
+     * Shrinks the number of available permits by the indicated
+     * reduction. This method can be useful in subclasses that use
+     * semaphores to track resources that become unavailable. This
+     * method differs from {@code acquire} in that it does not block
+     * waiting for permits to become available.
+     *
+     * @param reduction the number of permits to remove
+     * @throws IllegalArgumentException if {@code reduction} is negative
+     */
+    protected void reducePermits(int reduction) {
+        if (reduction < 0) throw new IllegalArgumentException();
+        sync.reducePermits(reduction);
+    }
+
+    /**
+     * Returns {@code true} if this semaphore has fairness set true.
+     *
+     * @return {@code true} if this semaphore has fairness set true
+     */
+    public boolean isFair() {
+        return sync instanceof FairSync;
+    }
+
+    /**
+     * Queries whether any threads are waiting to acquire. Note that
+     * because cancellations may occur at any time, a {@code true}
+     * return does not guarantee that any other thread will ever
+     * acquire.  This method is designed primarily for use in
+     * monitoring of the system state.
+     *
+     * @return {@code true} if there may be other threads waiting to
+     *         acquire the lock
+     */
+    public final boolean hasQueuedThreads() {
+        return sync.hasQueuedThreads();
+    }
+
+    /**
+     * Returns an estimate of the number of threads waiting to acquire.
+     * The value is only an estimate because the number of threads may
+     * change dynamically while this method traverses internal data
+     * structures.  This method is designed for use in monitoring of the
+     * system state, not for synchronization control.
+     *
+     * @return the estimated number of threads waiting for this lock
+     */
+    public final int getQueueLength() {
+        return sync.getQueueLength();
+    }
+
+    /**
+     * Returns a collection containing threads that may be waiting to acquire.
+     * Because the actual set of threads may change dynamically while
+     * constructing this result, the returned collection is only a best-effort
+     * estimate.  The elements of the returned collection are in no particular
+     * order.  This method is designed to facilitate construction of
+     * subclasses that provide more extensive monitoring facilities.
+     *
+     * @return the collection of threads
+     */
+    protected Collection<Thread> getQueuedThreads() {
+        return sync.getQueuedThreads();
+    }
+
+    /**
+     * Returns a string identifying this semaphore, as well as its state.
+     * The state, in brackets, includes the String {@code "Permits ="}
+     * followed by the number of permits.
+     *
+     * @return a string identifying this semaphore, as well as its state
+     */
+    public String toString() {
+        return super.toString() + "[Permits = " + sync.getPermits() + "]";
+    }
 }
 ```
 
