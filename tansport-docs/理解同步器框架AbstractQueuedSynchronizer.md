@@ -4412,96 +4412,63 @@ public class Semaphore implements java.io.Serializable {
     }
 
     /**
-     * Acquires a permit from this semaphore, blocking until one is
-     * available.
+     * 从信号量获取一个 permit，阻塞直至获取一个可用。
      *
-     * <p>Acquires a permit, if one is available and returns immediately,
-     * reducing the number of available permits by one.
+     * 获取一个 permit，如果存在可用会立即返回，并将可用 permit 减一。
      *
-     * <p>If no permit is available then the current thread becomes
-     * disabled for thread scheduling purposes and lies dormant until
-     * some other thread invokes the {@link #release} method for this
-     * semaphore and the current thread is next to be assigned a permit.
+     * 如果没有可用的 permit，则处于线程调度目的，当前线程将被禁用并处于休眠状态，直到
+     * 某个其他线程调用此信号量的 release 方法并且当前线程被分配到可用的 permit。
      *
-     * <p>If the current thread is {@linkplain Thread#interrupt interrupted}
-     * while waiting for a permit then it will continue to wait, but the
-     * time at which the thread is assigned a permit may change compared to
-     * the time it would have received the permit had no interruption
-     * occurred.  When the thread does return from this method its interrupt
-     * status will be set.
+     * 如果当前线程在等待 permit 时发生中断，那么它将继续等待，但线程被分配 permit 的
+     * 时间与它在没有中断发生时收到 permit 的时间相比可能会发生变化。当线程从此方法返回
+     * 时，将设置其中断状态。
      */
     public void acquireUninterruptibly() {
         sync.acquireShared(1);
     }
 
     /**
-     * Acquires a permit from this semaphore, only if one is available at the
-     * time of invocation.
+     * 仅当在调用时有可用的 permit 时，才从此信号量获取 permit。
      *
-     * <p>Acquires a permit, if one is available and returns immediately,
-     * with the value {@code true},
-     * reducing the number of available permits by one.
+     * 获取一个 permit，如果存在一个可用则立即返回 true，并将可用 permit 的数量减一。
      *
-     * <p>If no permit is available then this method will return
-     * immediately with the value {@code false}.
+     * 如果没有可用的 permit，则此方法将立即返回 false。
      *
-     * <p>Even when this semaphore has been set to use a
-     * fair ordering policy, a call to {@code tryAcquire()} <em>will</em>
-     * immediately acquire a permit if one is available, whether or not
-     * other threads are currently waiting.
-     * This &quot;barging&quot; behavior can be useful in certain
-     * circumstances, even though it breaks fairness. If you want to honor
-     * the fairness setting, then use
-     * {@link #tryAcquire(long, TimeUnit) tryAcquire(0, TimeUnit.SECONDS) }
-     * which is almost equivalent (it also detects interruption).
+     * 即使次信号量已设置为公平排序策略，对于 tryAcquire() 的调用也会立即获得
+     * permit（如果可用），无论其他线程当前是否正在等待。这种“闯入”行为在某些情况下
+     * 可能很有用，即使它破坏了公平性。如果要尊重公平设置，请使用几乎等效的
+     * tryAcquire(0, TimeUnit.SECONDS)（它也会检测中断）。
      *
-     * @return {@code true} if a permit was acquired and {@code false}
-     *         otherwise
+     * 返回：如果获得了 permit，则为 true；否则为 false。
      */
     public boolean tryAcquire() {
         return sync.nonfairTryAcquireShared(1) >= 0;
     }
 
     /**
-     * Acquires a permit from this semaphore, if one becomes available
-     * within the given waiting time and the current thread has not
-     * been {@linkplain Thread#interrupt interrupted}.
+     * 如果在给定超时时间内没有中断，且 permit 可用，则从信号量中获取一个 permit。
      *
-     * <p>Acquires a permit, if one is available and returns immediately,
-     * with the value {@code true},
-     * reducing the number of available permits by one.
+     * 获取一个 permit，如果存在一个可用则立即返回 true，并将可用 permit 的数量减一。
      *
-     * <p>If no permit is available then the current thread becomes
-     * disabled for thread scheduling purposes and lies dormant until
-     * one of three things happens:
-     * <ul>
-     * <li>Some other thread invokes the {@link #release} method for this
-     * semaphore and the current thread is next to be assigned a permit; or
-     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
-     * the current thread; or
-     * <li>The specified waiting time elapses.
-     * </ul>
+     * 如果没有可用的 permit，则处于线程调度目的，当前线程将被禁用并处于休眠状态，直到
+     * 发生以下三种情况下之一：
+     * - 其他一些线程调用此信号量的 release 方法，并且当前线接下来获得一个 permit；或者
+     * - 其他线程中断当前线程；或者
+     * - 超过指定的超时时间。
      *
-     * <p>If a permit is acquired then the value {@code true} is returned.
+     * 如果获得 permit，则返回 true。
      *
-     * <p>If the current thread:
-     * <ul>
-     * <li>has its interrupted status set on entry to this method; or
-     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
-     * to acquire a permit,
-     * </ul>
-     * then {@link InterruptedException} is thrown and the current thread's
-     * interrupted status is cleared.
+     * 如果当前线程：
+     * - 在进入此方法时设置其中断状态；或者
+     * - 在等待过程中被中断。
      *
-     * <p>If the specified waiting time elapses then the value {@code false}
-     * is returned.  If the time is less than or equal to zero, the method
-     * will not wait at all.
+     * 然后抛出InterruptedException并清除当前线程的中断状态。
      *
-     * @param timeout the maximum time to wait for a permit
-     * @param unit the time unit of the {@code timeout} argument
-     * @return {@code true} if a permit was acquired and {@code false}
-     *         if the waiting time elapsed before a permit was acquired
-     * @throws InterruptedException if the current thread is interrupted
+     * 如果经过指定的等待时间，则返回 false。如果时间小于等于零，则该方法不会等待。
+     * 参数：timeout - 等待 permit 的最大时间
+     *      unit - timeout 参数的时间单位
+     * 返回：如果已经获得 permit，则为 true；如果获得之前超过等待时间，则为 false。
+     * @throws InterruptedException - 如果当前线程被中断
      */
     public boolean tryAcquire(long timeout, TimeUnit unit)
             throws InterruptedException {
@@ -4509,57 +4476,41 @@ public class Semaphore implements java.io.Serializable {
     }
 
     /**
-     * Releases a permit, returning it to the semaphore.
+     * 释放 permit，将其返回给信号量。
      *
-     * <p>Releases a permit, increasing the number of available permits by
-     * one.  If any threads are trying to acquire a permit, then one is
-     * selected and given the permit that was just released.  That thread
-     * is (re)enabled for thread scheduling purposes.
+     * 释放 permit，将可用 permit 数量加一。如果任何线程试图获取 permit，则选择一个
+     * 线程给予刚释放的 permit。出于线程调度目的，该线程（重新）启用。
      *
-     * <p>There is no requirement that a thread that releases a permit must
-     * have acquired that permit by calling {@link #acquire}.
-     * Correct usage of a semaphore is established by programming convention
-     * in the application.
+     * 不要求线程必须先调用 acquire 获得 permit，之后才能 release 释放 permit。
+     * 信号量的正确使用是通过应用程序中的编程约定建立的。
      */
     public void release() {
         sync.releaseShared(1);
     }
 
     /**
-     * Acquires the given number of permits from this semaphore,
-     * blocking until all are available,
-     * or the thread is {@linkplain Thread#interrupt interrupted}.
+     * 从信号量中获取给定数量的 permits，阻塞直到有足够数量的 permits 可用，线程中断
+     * 则终止。
      *
-     * <p>Acquires the given number of permits, if they are available,
-     * and returns immediately, reducing the number of available permits
-     * by the given amount.
+     * 获取给定数量的 permits，如果可用则立即返回 true，并将可用 permits 的数量减去
+     * 给定的数量。
      *
-     * <p>If insufficient permits are available then the current thread becomes
-     * disabled for thread scheduling purposes and lies dormant until
-     * one of two things happens:
-     * <ul>
-     * <li>Some other thread invokes one of the {@link #release() release}
-     * methods for this semaphore, the current thread is next to be assigned
-     * permits and the number of available permits satisfies this request; or
-     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
-     * the current thread.
-     * </ul>
+     * 如果没有可用的 permits，或可用 permits 数量不足，则处于线程调度目的，当前线程将
+     * 被禁用并处于休眠状态，直到发生以下量种情况下之一：
+     * - 其他一些线程调用此信号量的 release 方法，并且当前线接下来获得足够数量的 permits；或者
+     * - 其他线程中断当前线程。
      *
-     * <p>If the current thread:
-     * <ul>
-     * <li>has its interrupted status set on entry to this method; or
-     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
-     * for a permit,
-     * </ul>
-     * then {@link InterruptedException} is thrown and the current thread's
-     * interrupted status is cleared.
-     * Any permits that were to be assigned to this thread are instead
-     * assigned to other threads trying to acquire permits, as if
-     * permits had been made available by a call to {@link #release()}.
+     * 如果当前线程：
+     * - 在进入此方法时设置其中断状态；或者
+     * - 在等待过程中被中断。
      *
-     * @param permits the number of permits to acquire
-     * @throws InterruptedException if the current thread is interrupted
-     * @throws IllegalArgumentException if {@code permits} is negative
+     * 然后抛出InterruptedException并清除当前线程的中断状态。将分配给当前线程的 permits
+     * 改为分配给尝试获取 permit 的其他线程，就好像通过调用 release() 使 permits 可用
+     * 一样。
+     *
+     * 参数：permits - 获得的 permits 数量
+     * @throws InterruptedException - 如果当前线程被中断
+     * @throws IllegalArgumentException – 如果permits是负数
      */
     public void acquire(int permits) throws InterruptedException {
         if (permits < 0) throw new IllegalArgumentException();
@@ -4567,26 +4518,19 @@ public class Semaphore implements java.io.Serializable {
     }
 
     /**
-     * Acquires the given number of permits from this semaphore,
-     * blocking until all are available.
+     * 从信号量获取给定数量的 permits，阻塞直至所有的 permits 可用。
      *
-     * <p>Acquires the given number of permits, if they are available,
-     * and returns immediately, reducing the number of available permits
-     * by the given amount.
+     * 获取给定数量的 permits，如果存在可用会立即返回，并将可用 permits 减去给定数量。
      *
-     * <p>If insufficient permits are available then the current thread becomes
-     * disabled for thread scheduling purposes and lies dormant until
-     * some other thread invokes one of the {@link #release() release}
-     * methods for this semaphore, the current thread is next to be assigned
-     * permits and the number of available permits satisfies this request.
+     * 如果没有可用的 permits，或可用的 permits 不足则处于线程调度目的，当前线程将被禁
+     * 用并处于休眠状态，直到某个其他线程调用此信号量的 release 方法并且当前线程被分配
+     * 到足够数量可用的 permits。
      *
-     * <p>If the current thread is {@linkplain Thread#interrupt interrupted}
-     * while waiting for permits then it will continue to wait and its
-     * position in the queue is not affected.  When the thread does return
-     * from this method its interrupt status will be set.
+     * 如果当前线程在等待 permits 时发生中断，那么它将继续等待，并且它在队列中的位置不受
+     * 影响。当线程确实从此方法返回时，将设置其中断状态。
      *
-     * @param permits the number of permits to acquire
-     * @throws IllegalArgumentException if {@code permits} is negative
+     * 参数：permits - permits 数量
+     * @throws IllegalArgumentException - 如果 permits 为负数
      */
     public void acquireUninterruptibly(int permits) {
         if (permits < 0) throw new IllegalArgumentException();
@@ -4594,31 +4538,20 @@ public class Semaphore implements java.io.Serializable {
     }
 
     /**
-     * Acquires the given number of permits from this semaphore, only
-     * if all are available at the time of invocation.
+     * 仅当调用时有给定数量的 permits 可用时，才从此信号量中获取到给定数量的 permits。
      *
-     * <p>Acquires the given number of permits, if they are available, and
-     * returns immediately, with the value {@code true},
-     * reducing the number of available permits by the given amount.
+     * 获取给定数量的 permits，如果存在可用会立即返回，并将可用 permit 减去给定数量。
+     * 
+     * 如果可用的 permits 不足，则此方法立即返回 false，并且可用 permits 数量不变。
      *
-     * <p>If insufficient permits are available then this method will return
-     * immediately with the value {@code false} and the number of available
-     * permits is unchanged.
+     * 即使次信号量已设置为公平排序策略，对于 tryAcquire() 的调用也会立即获得
+     * permit（如果可用），无论其他线程当前是否正在等待。这种“闯入”行为在某些情况下
+     * 可能很有用，即使它破坏了公平性。如果要尊重公平设置，请使用几乎等效的
+     * tryAcquire(permits, 0, TimeUnit.SECONDS)（它也会检测中断）。
      *
-     * <p>Even when this semaphore has been set to use a fair ordering
-     * policy, a call to {@code tryAcquire} <em>will</em>
-     * immediately acquire a permit if one is available, whether or
-     * not other threads are currently waiting.  This
-     * &quot;barging&quot; behavior can be useful in certain
-     * circumstances, even though it breaks fairness. If you want to
-     * honor the fairness setting, then use {@link #tryAcquire(int,
-     * long, TimeUnit) tryAcquire(permits, 0, TimeUnit.SECONDS) }
-     * which is almost equivalent (it also detects interruption).
-     *
-     * @param permits the number of permits to acquire
-     * @return {@code true} if the permits were acquired and
-     *         {@code false} otherwise
-     * @throws IllegalArgumentException if {@code permits} is negative
+     * 参数：permits - 获取的 permits 数量
+     * 返回：如果获得了 permit，则为 true，否则为 false
+     * @throws IllegalArgumentException - 如果 permits 为负数
      */
     public boolean tryAcquire(int permits) {
         if (permits < 0) throw new IllegalArgumentException();
@@ -4626,54 +4559,34 @@ public class Semaphore implements java.io.Serializable {
     }
 
     /**
-     * Acquires the given number of permits from this semaphore, if all
-     * become available within the given waiting time and the current
-     * thread has not been {@linkplain Thread#interrupt interrupted}.
+     * 如果在给定超时时间内没有中断，且有足够的 permits 可用，则从信号量中获取 permits。
      *
-     * <p>Acquires the given number of permits, if they are available and
-     * returns immediately, with the value {@code true},
-     * reducing the number of available permits by the given amount.
+     * 获取给定数量的 permits，如果存在足够数量可用则立即返回 true，并将可用 permits 的
+     * 数量减去给定数值。
      *
-     * <p>If insufficient permits are available then
-     * the current thread becomes disabled for thread scheduling
-     * purposes and lies dormant until one of three things happens:
-     * <ul>
-     * <li>Some other thread invokes one of the {@link #release() release}
-     * methods for this semaphore, the current thread is next to be assigned
-     * permits and the number of available permits satisfies this request; or
-     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
-     * the current thread; or
-     * <li>The specified waiting time elapses.
-     * </ul>
+     * 如果没有足够可用的 permits，则处于线程调度目的，当前线程将被禁用并处于休眠状态，直到
+     * 发生以下三种情况下之一：
+     * - 其他一些线程调用此信号量的 release 方法，并且当前线接下来获得足够数量 permits；或者
+     * - 其他线程中断当前线程；或者
+     * - 超过指定的超时时间。
      *
-     * <p>If the permits are acquired then the value {@code true} is returned.
+     * 如果获得 permits，则返回 true。
      *
-     * <p>If the current thread:
-     * <ul>
-     * <li>has its interrupted status set on entry to this method; or
-     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
-     * to acquire the permits,
-     * </ul>
-     * then {@link InterruptedException} is thrown and the current thread's
-     * interrupted status is cleared.
-     * Any permits that were to be assigned to this thread, are instead
-     * assigned to other threads trying to acquire permits, as if
-     * the permits had been made available by a call to {@link #release()}.
+     * 如果当前线程：
+     * - 在进入此方法时设置其中断状态；或者
+     * - 在等待过程中被中断。
      *
-     * <p>If the specified waiting time elapses then the value {@code false}
-     * is returned.  If the time is less than or equal to zero, the method
-     * will not wait at all.  Any permits that were to be assigned to this
-     * thread, are instead assigned to other threads trying to acquire
-     * permits, as if the permits had been made available by a call to
-     * {@link #release()}.
+     * 然后抛出InterruptedException并清除当前线程的中断状态。将分配给当前线程的 permits
+     * 改为分配给尝试获取 permit 的其他线程，就好像通过调用 release() 使 permits 可用
+     * 一样。
      *
-     * @param permits the number of permits to acquire
-     * @param timeout the maximum time to wait for the permits
-     * @param unit the time unit of the {@code timeout} argument
-     * @return {@code true} if all permits were acquired and {@code false}
-     *         if the waiting time elapsed before all permits were acquired
-     * @throws InterruptedException if the current thread is interrupted
-     * @throws IllegalArgumentException if {@code permits} is negative
+     * 如果经过指定的等待时间，则返回 false。如果时间小于等于零，则该方法不会等待。
+     * 参数：permits - 获得的 permits 数量
+     *      timeout - 等待 permit 的最大时间
+     *      unit - timeout 参数的时间单位
+     * 返回：如果已经获得 permits，则为 true；如果获得之前超过等待时间，则为 false。
+     * @throws InterruptedException - 如果当前线程被中断
+     * @throws IllegalArgumentException - 如果 permits 为负数
      */
     public boolean tryAcquire(int permits, long timeout, TimeUnit unit)
             throws InterruptedException {
@@ -4682,26 +4595,19 @@ public class Semaphore implements java.io.Serializable {
     }
 
     /**
-     * Releases the given number of permits, returning them to the semaphore.
+     * 释放给定数量的 permits，将其返回给信号量。
      *
-     * <p>Releases the given number of permits, increasing the number of
-     * available permits by that amount.
-     * If any threads are trying to acquire permits, then one
-     * is selected and given the permits that were just released.
-     * If the number of available permits satisfies that thread's request
-     * then that thread is (re)enabled for thread scheduling purposes;
-     * otherwise the thread will wait until sufficient permits are available.
-     * If there are still permits available
-     * after this thread's request has been satisfied, then those permits
-     * are assigned in turn to other threads trying to acquire permits.
+     * 释放给定数量的 permits，将可用 permits 数量加上改数量。如果任何线程试图获取
+     * permit，则选择一个线程给予刚释放的 permits。如果可用 permits 的数量满足该
+     * 线程的要求，处于线程调度目的，该线程（重新）启用；否则线程将等待直到有足够的
+     * permits 可用。如果在满足该线程的请求后仍然有可用的 permits，则这些 permits
+     * 将依次分配给试图获取 permits 的线程。
      *
-     * <p>There is no requirement that a thread that releases a permit must
-     * have acquired that permit by calling {@link java.util.concurrent.Semaphore#acquire acquire}.
-     * Correct usage of a semaphore is established by programming convention
-     * in the application.
+     * 不要求线程必须先调用 acquire 获得 permits 之后才能 release 释放 permits。
+     * 信号量的正确使用是通过应用程序中的编程约定建立的。
      *
-     * @param permits the number of permits to release
-     * @throws IllegalArgumentException if {@code permits} is negative
+     * 参数：permits - 释放的 permits 数量
+     * @throws IllegalArgumentException - permits 为负数
      */
     public void release(int permits) {
         if (permits < 0) throw new IllegalArgumentException();
@@ -4709,99 +4615,679 @@ public class Semaphore implements java.io.Serializable {
     }
 
     /**
-     * Returns the current number of permits available in this semaphore.
+     * 返回此信号量当前可用的 permits 数量。
      *
-     * <p>This method is typically used for debugging and testing purposes.
+     * 此方法通常用于调试和测试。
      *
-     * @return the number of permits available in this semaphore
+     * 返回：此信号量中可用的 permit 数量
      */
     public int availablePermits() {
         return sync.getPermits();
     }
 
     /**
-     * Acquires and returns all permits that are immediately available.
+     * 获取并返回当前所有的 permits。
      *
-     * @return the number of permits acquired
+     * 返回：获得的 permits 数量
      */
     public int drainPermits() {
         return sync.drainPermits();
     }
 
     /**
-     * Shrinks the number of available permits by the indicated
-     * reduction. This method can be useful in subclasses that use
-     * semaphores to track resources that become unavailable. This
-     * method differs from {@code acquire} in that it does not block
-     * waiting for permits to become available.
+     * 按照指定的 reduction 减少可用 permits 数量。此方法在使用信号量来跟踪
+     * 子类中资源变得不可用情况会很有用。此方法与 acquire 的不同之处在于它不会
+     * 阻塞等待 permits 可用。
      *
-     * @param reduction the number of permits to remove
-     * @throws IllegalArgumentException if {@code reduction} is negative
+     * 参数：reduction - 移除的 permits 数量
+     * @throws IllegalArgumentException - 如果 reduction 为负数
      */
     protected void reducePermits(int reduction) {
         if (reduction < 0) throw new IllegalArgumentException();
         sync.reducePermits(reduction);
     }
+}
+```
+
+其他一些用于监控的非核心方法不再展示。
+
+### 8.4 CountDownLatch
+
+一种同步辅助工具，允许一个或多个线程等待，知道在其他线程中执行的一组操作完成。
+
+`CountDownLatch` 使用给定的 *计数（count）* 进行初始化。调用 `await` 方法将会一直阻塞，直到调用 `countDown` 方法将当前计数减少到零，只有所有等待的线程都被释放，任何后续的 `await` 方法调用将会立即返回。这是一次性使用的现象——计数是无法重置的。如果你需要能够重置计数的版本，请考虑使用 `CyclicBarrier`。
+
+`CountDownLatch` 是一种多功能同步工具，可用于多种用途。使用计数 1 初始化的 `CountDownLatch` 可以用作简单的开/关闩锁：所有调用 `await` 方法的线程都将在门处等待，直到它被调用 `countDown` 方法线程打开门。初始化为 N 的 `CountDownLatch`  可用于使一个线程等待，直到 N 个线程完成某个动作，或某个动作完成 N 次。
+
+`CountDownLatch` 的一个有用属性是它不需要调用 `countDown` 的线程等待计数变为零才能继续，它只是阻塞调用 `await` 方法的线程，直到所有线程都可以通过。
+
+**示例用法：** 这是一对类，其中一组工作线程使用两个 `CountDownLatch`：
+
+- 第一个是启动信号，它阻塞任何 worker 继续前进，直到 driver 准备好让他们继续。
+- 第二个是完成信号，允许 driver 程序等待所有 worker 完成。
+
+```java
+class Driver {
+  void main() throws InterruptedException {
+    CountDownLatch startSignal = new CountDownLatch(1);
+    CountDownLatch doneSignal = new CountDownLatch(N);
+    
+    for (int i = 0; i < N; ++i) { // create and start threads
+      new Thread(new Worker(startSignal, doneSignal)).start();
+    }
+    
+    doSomethingElse(); // don't let run yet
+    startSignal.countDown(); // let all threads proceed
+    doSomethingElse(); 
+    doSignal.await(); // wait for all to finish
+  }
+}
+
+class Worker implements Runnable {
+  private final CountDownLatch startSignal;
+  private final CountDownLatch doneSignal;
+  Worker(CountDownLatch startSignal, CountDownLatch doneSignal) {
+    this.startSignal = startSignal;
+    this.doneSignal = doneSignal;
+  }
+  
+  public void run() {
+    try {
+      startSignal.await();
+      doWork();
+      doneSignal.countDown();
+    } catch (InterruptedException ex) {} //return;
+  }
+  
+  void doWork() { ... }
+}
+```
+
+另一个典型的用法是将一个问题分成 N 个部分，用一个 `Runnable` 描述每个部分，该 `Runnable` 执行该部分并在完成后进行 `countDown` 操作，并将所有 `Runnables` 排队到一个 `Executor`。当所有的子任务执行完成后，协调线程就可以在 `await` 状态中被释放。（当线程必须以这种方式重复使用 `countDown` 时，请改用 `CyclicBarrier`）
+
+```java
+class Driver2 { // ...
+  void main() throws InterruptedException {
+    CountDownLatch doneSignal = new CountDownLatch(N);
+    Executor e = ...
+    
+    for (int i = 0; i < N; ++i) { // create and start threads
+      e.execute(new WorkerRunnable(doneSignal, i));
+    }
+    
+    doneSignal.await(); // wait for all to finish
+  }
+}
+
+class WorkRunnable implements Runnable {
+  private final CountDownLatch doneSignal;
+  private final int i;
+  WorkerRunnable(CountDownLatch doneSignal, int i) {
+    this.doneSignal = doneSignal;
+    this.i = i;
+  }
+  
+  public void run() {
+    try {
+      doWork(i);
+      doneSignal.countDown();
+    } catch (InterruptedException ex) {} // return;
+  }
+  
+  void doWork() { ... }
+}
+```
+
+内存一致性影响：直到计数到达零，调用 `countDown()` 之前的线程中的动作 `happen-before` 在另一个线程中从相应的 `await()` 成功返回之后的动作。
+
+#### 8.4.1 Sync
+
+`CountDownLatch` 的同步控制。使用 `AQS` 状态来表示计数
+
+```java
+private static final class Sync extends AbstractQueuedSynchronizer {
+    private static final long serialVersionUID = 4982264981922014374L;
+
+    Sync(int count) {
+        setState(count);
+    }
+
+    int getCount() {
+        return getState();
+    }
+
+    protected int tryAcquireShared(int acquires) {
+        return (getState() == 0) ? 1 : -1;
+    }
+
+    protected boolean tryReleaseShared(int releases) {
+        // Decrement count; signal when transition to zero
+        for (;;) {
+            int c = getState();
+            if (c == 0)
+                return false;
+            int nextc = c-1;
+            // CAS 递减，为零返回 true
+            if (compareAndSetState(c, nextc))
+                return nextc == 0;
+        }
+    }
+}
+```
+
+#### 8.4.2 await & countDown
+
+```java
+public class CountDownLatch {
+    private final Sync sync;
 
     /**
-     * Returns {@code true} if this semaphore has fairness set true.
+     * 使用给定的计数初始化 CountDownLatch。
      *
-     * @return {@code true} if this semaphore has fairness set true
+     * 参数：count - 在线程可以通过 await 之前必须调用 countDown 的次数
+     * @throws IllegalArgumentException - 如果 count 为负数
      */
-    public boolean isFair() {
-        return sync instanceof FairSync;
+    public CountDownLatch(int count) {
+        if (count < 0) throw new IllegalArgumentException("count < 0");
+        this.sync = new Sync(count);
     }
 
     /**
-     * Queries whether any threads are waiting to acquire. Note that
-     * because cancellations may occur at any time, a {@code true}
-     * return does not guarantee that any other thread will ever
-     * acquire.  This method is designed primarily for use in
-     * monitoring of the system state.
+     * 阻塞当前线程，使其等待，直到 CountDownLatch 计数器为零，线程中断则终止。
      *
-     * @return {@code true} if there may be other threads waiting to
-     *         acquire the lock
+     * 如果当前计数为零，则此方法立即返回。
+     *
+     * 如果当前计数大于零，出于线程调度目的，当前线程将被禁用并处于休眠状态，直到以下
+     * 两种情况下之一发生：
+     * - 由于调用了 countDown 方法，计数达到零；或者
+     * - 其他一些线程中断当前线程。
+     *
+     * 如果当前线程：
+     * - 在进入此方法时设置其中断状态；或者
+     * - 等待过程中被中断。
+     *
+     * 然后抛出InterruptedException并清除当前线程的中断状态。
+     *
+     * @throws InterruptedException - 如果当前线程在等待中被中断
      */
-    public final boolean hasQueuedThreads() {
-        return sync.hasQueuedThreads();
+    public void await() throws InterruptedException {
+        sync.acquireSharedInterruptibly(1);
     }
 
     /**
-     * Returns an estimate of the number of threads waiting to acquire.
-     * The value is only an estimate because the number of threads may
-     * change dynamically while this method traverses internal data
-     * structures.  This method is designed for use in monitoring of the
-     * system state, not for synchronization control.
      *
-     * @return the estimated number of threads waiting for this lock
+     * 阻塞当前线程，使其等待，直到 CountDownLatch 计数器为零，或到达指定的等待时间，
+     * 线程中断则终止。
+     *
+     * 如果当前计数为零，则此方法立即返回 true。
+     *
+     * 如果当前计数大于零，出于线程调度目的，当前线程将被禁用并处于休眠状态，直到以下
+     * 三种情况下之一发生：
+     * - 由于调用了 countDown 方法，计数达到零；或者
+     * - 其他一些线程中断当前线程；或者
+     * - 达到指定的等待时间。
+     * 
+     * 如果计数到达零，则该方法返回 true。
+     *
+     * 如果当前线程：
+     * - 在进入此方法时设置其中断状态；或者
+     * - 等待过程中被中断。
+     *
+     * 然后抛出InterruptedException并清除当前线程的中断状态。
+     * 
+     * 如果经过了指定的等待时间，则返回 false。如果时间小于或等于零，则该方法不会等待。
+     * 
+     * 
+     * 参数：timeout - 等待的最长时间
+     *      unit - timeout参数的单位
+     * 返回：如果计数到达零，则返回 true；如果在计数到达零之前超过的等待时间，则返回 false
+     * @throws InterruptedException - 如果当前线程在等待中被中断
      */
-    public final int getQueueLength() {
-        return sync.getQueueLength();
+    public boolean await(long timeout, TimeUnit unit)
+            throws InterruptedException {
+        return sync.tryAcquireSharedNanos(1, unit.toNanos(timeout));
     }
 
     /**
-     * Returns a collection containing threads that may be waiting to acquire.
-     * Because the actual set of threads may change dynamically while
-     * constructing this result, the returned collection is only a best-effort
-     * estimate.  The elements of the returned collection are in no particular
-     * order.  This method is designed to facilitate construction of
-     * subclasses that provide more extensive monitoring facilities.
+     * 减少 CountDownLatch 的计数，如果计数达到零，则释放所有等待线程。
      *
-     * @return the collection of threads
+     * 如果当前计数大于零，则递减。如果新计数为零，出于线程调度重启所有等待线程。
+     *
+     * 如果当前计数为零，则不会发生任何事情。
      */
-    protected Collection<Thread> getQueuedThreads() {
-        return sync.getQueuedThreads();
+    public void countDown() {
+        sync.releaseShared(1);
+    }
+}
+```
+
+### 8.5 CyclicBarrier
+
+一种同步辅助工具，它允许一组线程相互等待以达到共同的障碍点。`CyclicBarriers` 在涉及固定大小的线程组的程序中很有用，这些线程组必须偶尔相互等待。屏障被称为 `循环（Cyclic）` 的，因为它们可以在等待线程被释放后重新使用。
+
+`CyclicBarrier` 支持一个可选的 `Runnable` 命令，该命令在每个屏障点运行一次，在最后一个线程到达之后，但是在任何线程被释放之前。此屏障操作对于在任何一方继续执行之前更新共享状态很有用。
+
+**示例用法：** 以下是在并行分解设计中使用屏障的示例：
+
+```java
+class Solver {
+  final int N;
+  final float[][] data;
+  final CyclicBarrier barrier;
+  
+  class Worker implements Runnable {
+    int myRow;
+    Worker(int row) { myRow = row; }
+    public void run() {
+      while (!done()) {
+        processRow(myRow);
+        
+        try {
+          barrier.await();
+        } catch (InterruptedException ex) {
+          return;
+        } catch (BrokenBarrierException ex) {
+          return;
+        }
+      }
+    }
+  }
+  
+  public Solver(float[][] matrix) {
+    data = matrix;
+    N = matrix.length;
+    Runnable barrierAction = new Runnable() {
+      public void run() {
+        margeRows(...);
+      }
+    };
+    barrier = new CyclicBarrier(N, barrierAction);
+    
+    List<Thread> threads = new ArrayList<Thread>(N);
+    for (int i = 0; i < N; i++) {
+      Thread thread = new Thread(new Worker(i));
+      threads.add(thread);
+      thread.start();
+    }
+    
+    // wait until done
+    for (Thread thread : threads) {
+      thread.join();
+    }
+  }
+}
+```
+
+在这里，每个工作线程处理矩阵的一行，然后在屏障处等待，直到处理完所有行。处理完所有行后，将执行提供的 `Runnable` 屏障操作，合并矩阵行。如果合并已经确定完成，那 `done()` 方法会返回 true ，每个工作线程将会终止。
+
+如果 barrier action 在执行时不依赖于被挂起的各个线程，那么该方法中的任何线程都可以在它被释放时执行该动作。为了方便起见，每次调用 `await` 都会返回该线程在屏障处到达的索引。然后，您可以选择那个线程应该执行 barrier action，例如：
+
+```java
+if (barrier.await() == 0) {
+  // log the completion of this iteration
+}
+```
+
+`CyclicBarrier` 对失败的同步尝试使用 `all-or-none` 模型：如果线程由于中断、故障或超时而过早地离开屏障点，则在该屏障点等待的所有其他线程也会通过 `BrokenBarrierException`（或者如果它们也在同时被中断，抛出`InterruptedException` ）。
+
+内存一致性效果：在调用 `await()` 之前线程中的操作 happen-before 作为 barrier action 的一部分的操作，而这些操作又 happen-before 从其他线程中的相应 `await()` 成功返回之后的操作。
+
+#### 8.5.1 Generation
+
+屏障的每次使用都会表现为 `generation` 实例。每当屏障被触发或重置时，`generation` 就会发生变化。可能有许多 `generation` 与使用屏障的线程相关联 —— 由于锁定可能会以不确定的方式分配给等待线程 —— 但一次只能使其中一个 `generation` 处于活动状态（count 使用的那个）并且所有其余的线程要么 broken，要么 trip（可能是指阻塞？）。如果有中断带没有后续重置，则不需要活动的 `generation`。
+
+```java
+private static class Generation {
+    boolean broken = false;
+}
+```
+
+#### 8.5.2 实现详解
+
+```java
+public class CyclicBarrier {
+
+    // 忽略 Generation Class
+
+    /** 用户保护屏障入口的锁 */
+    private final ReentrantLock lock = new ReentrantLock();
+    /** 等待直到 triped 的 condition */
+    private final Condition trip = lock.newCondition();
+    /** 分片数量 */
+    private final int parties;
+    /* tripped 时执行的命令 */
+    private final Runnable barrierCommand;
+    /** 当前 generation */
+    private Generation generation = new Generation();
+
+    /**
+     * 仍在等待的 parties 数量。每个 generation 都会讲 parties 减少到 0。
+     * 每次生成新的 generation 或 broken 时会重置。
+     */
+    private int count;
+
+    /**
+     * 更新屏障 trip 状态，并唤醒全部。只有当持有锁才可以调用。
+     */
+    private void nextGeneration() {
+        // signal completion of last generation
+        trip.signalAll();
+        // set up next generation
+        count = parties;
+        generation = new Generation();
     }
 
     /**
-     * Returns a string identifying this semaphore, as well as its state.
-     * The state, in brackets, includes the String {@code "Permits ="}
-     * followed by the number of permits.
-     *
-     * @return a string identifying this semaphore, as well as its state
+     * 设置当前的 generation 为 broken，并唤醒全部。只有当持有锁才可以调用。
      */
-    public String toString() {
-        return super.toString() + "[Permits = " + sync.getPermits() + "]";
+    private void breakBarrier() {
+        generation.broken = true;
+        count = parties;
+        trip.signalAll();
+    }
+
+    /**
+     * 屏障的主要代码，涵盖各种策略。
+     */
+    private int dowait(boolean timed, long nanos)
+        throws InterruptedException, BrokenBarrierException,
+               TimeoutException {
+        // 屏障入口，先获得锁
+        final ReentrantLock lock = this.lock;
+        lock.lock();
+        try {
+            // 获取当前的 generation
+            final Generation g = generation;
+
+            // 判断当前是否 broken，抛出异常
+            if (g.broken)
+                throw new BrokenBarrierException();
+
+            // 判断线程是否中断
+            if (Thread.interrupted()) {
+                breakBarrier();
+                throw new InterruptedException();
+            }
+
+            // 获取当前索引
+            int index = --count;
+            if (index == 0) {  // tripped
+                // 是否执行命令
+                boolean ranAction = false;
+                try {
+                    final Runnable command = barrierCommand;
+                    if (command != null)
+                        command.run();
+                    ranAction = true;
+                    // 下一个 generation，也就是重置屏障
+                    nextGeneration();
+                    return 0;
+                } finally {
+                    if (!ranAction)
+                        breakBarrier();
+                }
+            }
+
+            // loop until tripped, broken, interrupted, or timed out
+            for (;;) {
+                try {
+                    if (!timed)
+                        trip.await();
+                    else if (nanos > 0L)
+                        nanos = trip.awaitNanos(nanos);
+                } catch (InterruptedException ie) {
+                    if (g == generation && ! g.broken) {
+                        breakBarrier();
+                        throw ie;
+                    } else {
+                        // We're about to finish waiting even if we had not
+                        // been interrupted, so this interrupt is deemed to
+                        // "belong" to subsequent execution.
+                        Thread.currentThread().interrupt();
+                    }
+                }
+
+                if (g.broken)
+                    throw new BrokenBarrierException();
+
+                if (g != generation)
+                    return index;
+
+                if (timed && nanos <= 0L) {
+                    breakBarrier();
+                    throw new TimeoutException();
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Creates a new {@code CyclicBarrier} that will trip when the
+     * given number of parties (threads) are waiting upon it, and which
+     * will execute the given barrier action when the barrier is tripped,
+     * performed by the last thread entering the barrier.
+     *
+     * @param parties the number of threads that must invoke {@link #await}
+     *        before the barrier is tripped
+     * @param barrierAction the command to execute when the barrier is
+     *        tripped, or {@code null} if there is no action
+     * @throws IllegalArgumentException if {@code parties} is less than 1
+     */
+    public CyclicBarrier(int parties, Runnable barrierAction) {
+        if (parties <= 0) throw new IllegalArgumentException();
+        this.parties = parties;
+        this.count = parties;
+        this.barrierCommand = barrierAction;
+    }
+
+    /**
+     * Creates a new {@code CyclicBarrier} that will trip when the
+     * given number of parties (threads) are waiting upon it, and
+     * does not perform a predefined action when the barrier is tripped.
+     *
+     * @param parties the number of threads that must invoke {@link #await}
+     *        before the barrier is tripped
+     * @throws IllegalArgumentException if {@code parties} is less than 1
+     */
+    public CyclicBarrier(int parties) {
+        this(parties, null);
+    }
+
+    /**
+     * Returns the number of parties required to trip this barrier.
+     *
+     * @return the number of parties required to trip this barrier
+     */
+    public int getParties() {
+        return parties;
+    }
+
+    /**
+     * Waits until all {@linkplain #getParties parties} have invoked
+     * {@code await} on this barrier.
+     *
+     * <p>If the current thread is not the last to arrive then it is
+     * disabled for thread scheduling purposes and lies dormant until
+     * one of the following things happens:
+     * <ul>
+     * <li>The last thread arrives; or
+     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
+     * the current thread; or
+     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
+     * one of the other waiting threads; or
+     * <li>Some other thread times out while waiting for barrier; or
+     * <li>Some other thread invokes {@link #reset} on this barrier.
+     * </ul>
+     *
+     * <p>If the current thread:
+     * <ul>
+     * <li>has its interrupted status set on entry to this method; or
+     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
+     * </ul>
+     * then {@link InterruptedException} is thrown and the current thread's
+     * interrupted status is cleared.
+     *
+     * <p>If the barrier is {@link #reset} while any thread is waiting,
+     * or if the barrier {@linkplain #isBroken is broken} when
+     * {@code await} is invoked, or while any thread is waiting, then
+     * {@link BrokenBarrierException} is thrown.
+     *
+     * <p>If any thread is {@linkplain Thread#interrupt interrupted} while waiting,
+     * then all other waiting threads will throw
+     * {@link BrokenBarrierException} and the barrier is placed in the broken
+     * state.
+     *
+     * <p>If the current thread is the last thread to arrive, and a
+     * non-null barrier action was supplied in the constructor, then the
+     * current thread runs the action before allowing the other threads to
+     * continue.
+     * If an exception occurs during the barrier action then that exception
+     * will be propagated in the current thread and the barrier is placed in
+     * the broken state.
+     *
+     * @return the arrival index of the current thread, where index
+     *         {@code getParties() - 1} indicates the first
+     *         to arrive and zero indicates the last to arrive
+     * @throws InterruptedException if the current thread was interrupted
+     *         while waiting
+     * @throws BrokenBarrierException if <em>another</em> thread was
+     *         interrupted or timed out while the current thread was
+     *         waiting, or the barrier was reset, or the barrier was
+     *         broken when {@code await} was called, or the barrier
+     *         action (if present) failed due to an exception
+     */
+    public int await() throws InterruptedException, BrokenBarrierException {
+        try {
+            return dowait(false, 0L);
+        } catch (TimeoutException toe) {
+            throw new Error(toe); // cannot happen
+        }
+    }
+
+    /**
+     * Waits until all {@linkplain #getParties parties} have invoked
+     * {@code await} on this barrier, or the specified waiting time elapses.
+     *
+     * <p>If the current thread is not the last to arrive then it is
+     * disabled for thread scheduling purposes and lies dormant until
+     * one of the following things happens:
+     * <ul>
+     * <li>The last thread arrives; or
+     * <li>The specified timeout elapses; or
+     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
+     * the current thread; or
+     * <li>Some other thread {@linkplain Thread#interrupt interrupts}
+     * one of the other waiting threads; or
+     * <li>Some other thread times out while waiting for barrier; or
+     * <li>Some other thread invokes {@link #reset} on this barrier.
+     * </ul>
+     *
+     * <p>If the current thread:
+     * <ul>
+     * <li>has its interrupted status set on entry to this method; or
+     * <li>is {@linkplain Thread#interrupt interrupted} while waiting
+     * </ul>
+     * then {@link InterruptedException} is thrown and the current thread's
+     * interrupted status is cleared.
+     *
+     * <p>If the specified waiting time elapses then {@link TimeoutException}
+     * is thrown. If the time is less than or equal to zero, the
+     * method will not wait at all.
+     *
+     * <p>If the barrier is {@link #reset} while any thread is waiting,
+     * or if the barrier {@linkplain #isBroken is broken} when
+     * {@code await} is invoked, or while any thread is waiting, then
+     * {@link BrokenBarrierException} is thrown.
+     *
+     * <p>If any thread is {@linkplain Thread#interrupt interrupted} while
+     * waiting, then all other waiting threads will throw {@link
+     * BrokenBarrierException} and the barrier is placed in the broken
+     * state.
+     *
+     * <p>If the current thread is the last thread to arrive, and a
+     * non-null barrier action was supplied in the constructor, then the
+     * current thread runs the action before allowing the other threads to
+     * continue.
+     * If an exception occurs during the barrier action then that exception
+     * will be propagated in the current thread and the barrier is placed in
+     * the broken state.
+     *
+     * @param timeout the time to wait for the barrier
+     * @param unit the time unit of the timeout parameter
+     * @return the arrival index of the current thread, where index
+     *         {@code getParties() - 1} indicates the first
+     *         to arrive and zero indicates the last to arrive
+     * @throws InterruptedException if the current thread was interrupted
+     *         while waiting
+     * @throws TimeoutException if the specified timeout elapses.
+     *         In this case the barrier will be broken.
+     * @throws BrokenBarrierException if <em>another</em> thread was
+     *         interrupted or timed out while the current thread was
+     *         waiting, or the barrier was reset, or the barrier was broken
+     *         when {@code await} was called, or the barrier action (if
+     *         present) failed due to an exception
+     */
+    public int await(long timeout, TimeUnit unit)
+        throws InterruptedException,
+               BrokenBarrierException,
+               TimeoutException {
+        return dowait(true, unit.toNanos(timeout));
+    }
+
+    /**
+     * Queries if this barrier is in a broken state.
+     *
+     * @return {@code true} if one or more parties broke out of this
+     *         barrier due to interruption or timeout since
+     *         construction or the last reset, or a barrier action
+     *         failed due to an exception; {@code false} otherwise.
+     */
+    public boolean isBroken() {
+        final ReentrantLock lock = this.lock;
+        lock.lock();
+        try {
+            return generation.broken;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Resets the barrier to its initial state.  If any parties are
+     * currently waiting at the barrier, they will return with a
+     * {@link BrokenBarrierException}. Note that resets <em>after</em>
+     * a breakage has occurred for other reasons can be complicated to
+     * carry out; threads need to re-synchronize in some other way,
+     * and choose one to perform the reset.  It may be preferable to
+     * instead create a new barrier for subsequent use.
+     */
+    public void reset() {
+        final ReentrantLock lock = this.lock;
+        lock.lock();
+        try {
+            breakBarrier();   // break the current generation
+            nextGeneration(); // start a new generation
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * Returns the number of parties currently waiting at the barrier.
+     * This method is primarily useful for debugging and assertions.
+     *
+     * @return the number of parties currently blocked in {@link #await}
+     */
+    public int getNumberWaiting() {
+        final ReentrantLock lock = this.lock;
+        lock.lock();
+        try {
+            return parties - count;
+        } finally {
+            lock.unlock();
+        }
     }
 }
 ```
