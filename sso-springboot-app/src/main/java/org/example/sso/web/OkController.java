@@ -1,7 +1,12 @@
 package org.example.sso.web;
 
-import org.example.sso.service.ReplayHelloService;
-import org.springframework.web.bind.annotation.*;
+import org.example.sso.service.impl.CycleRefA;
+import org.example.sso.service.impl.CycleRefB;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
@@ -18,15 +23,24 @@ import java.util.concurrent.TimeUnit;
 public class OkController {
 
     @Resource
-    private ReplayHelloService replayHelloService;
+    private CycleRefA a;
+
+    @Resource
+    private CycleRefB b;
+
 
     @RequestMapping("a")
-    public void hello(){
-        replayHelloService.hello();
+    public void a(){
+        a.doSomething();
+    }
+
+    @RequestMapping("b")
+    public void b(){
+        b.doSomething();
     }
 
     @RequestMapping("/ok")
-    public String ok(HttpServletRequest request, HttpServletResponse response) {
+    public String ok(String test, HttpServletRequest request, HttpServletResponse response) {
 
         return "ok";
     }

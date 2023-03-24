@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.demo.db.mapper.audit.AuditDOMapper">
+    <resultMap id="BaseResultMap" type="com.example.demo.db.AuditDO">
+        <!--
+          WARNING - @mbg.generated
+        -->
+        <id column="id" jdbcType="INTEGER" property="id"/>
+        <result column="uuid" jdbcType="VARCHAR" property="uuid"/>
+        <result column="source_type" jdbcType="INTEGER" property="sourceType"/>
+        <result column="source_id" jdbcType="VARCHAR" property="sourceId"/>
+        <result column="status" jdbcType="INTEGER" property="status"/>
+        <result column="app_code" jdbcType="VARCHAR" property="appCode"/>
+        <result column="org_code" jdbcType="VARCHAR" property="orgCode"/>
+        <result column="audit_type" jdbcType="INTEGER" property="auditType"/>
+        <result column="gmt_create" jdbcType="TIMESTAMP" property="gmtCreate"/>
+        <result column="gmt_modify" jdbcType="TIMESTAMP" property="gmtModify"/>
+        <result column="extend" jdbcType="VARCHAR" property="extend"/>
+        <result column="submit_user" jdbcType="VARCHAR" property="submitUser"/>
+        <result column="remark" jdbcType="VARCHAR" property="remark"/>
+        <result column="audit_user" jdbcType="VARCHAR" property="auditUser"/>
+        <result column="re_audit_user" jdbcType="VARCHAR" property="reAuditUser"/>
+    </resultMap>
+
+    <resultMap id="BaseResultExtensionMap" type="com.example.demo.db.AuditExtensionDO"
+               extends="BaseResultMap">
+        <result column="policy_code" jdbcType="VARCHAR" property="policyCode"/>
+        <result column="policy_name" jdbcType="VARCHAR" property="policyName"/>
+        <result column="rule_set_uuid" jdbcType="VARCHAR" property="ruleSetUuid"/>
+        <result column="rule_set_code" jdbcType="VARCHAR" property="ruleSetCode"/>
+        <result column="rule_set_name" jdbcType="VARCHAR" property="ruleSetName"/>
+        <result column="function_code" jdbcType="VARCHAR" property="functionCode"/>
+        <result column="function_name" jdbcType="VARCHAR" property="functionName"/>
+        <result column="decision_tool_code" jdbcType="VARCHAR" property="decisionToolCode"/>
+        <result column="decision_tool_name" jdbcType="VARCHAR" property="decisionToolName"/>
+        <result column="decision_tool_type" jdbcType="VARCHAR" property="decisionToolType"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        a.id, a.uuid,a.source_type, a.source_id, a.status, a.app_code, a.org_code, a.audit_type, a.gmt_create, a.gmt_modify,
+    a.extend, a.submit_user,a.remark,audit_user,re_audit_user
+    </sql>
+
+</mapper>

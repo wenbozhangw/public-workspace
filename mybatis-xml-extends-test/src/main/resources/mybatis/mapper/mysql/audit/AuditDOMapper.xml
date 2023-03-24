@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.demo.db.mapper.audit.AuditDOMapper">
+
+    <select id="selectForPolicy" resultMap="BaseResultExtensionMap">
+        select
+        <include refid="Base_Column_List"/>
+        ,
+        p.code as policy_code,
+        p.edit_name as policy_name
+        from
+        tiangong_audit_info a,tiangong_policy p
+        <where>
+            a.source_type=1
+            and a.source_id=p.uuid
+            and p.delete_flag=0
+            <if test="statusList != null and statusList.size() > 0">
+                AND a.status in
+                <foreach item="item" collection="statusList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="orgCodeList != null and orgCodeList.size() > 0">
+                AND a.org_code in
+                <foreach item="item" collection="orgCodeList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="appCodeList != null and appCodeList.size() > 0">
+                AND a.app_code in
+                <foreach item="item" collection="appCodeList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="sourceType != null">
+                and a.source_type=#{sourceType}
+            </if>
+            <if test="auditType != null">
+                and a.audit_type=#{auditType}
+            </if>
+            <if test="policyCode != null">
+                and p.code=#{policyCode}
+            </if>
+            <if test="policyName != null">
+                and p.edit_name like concat('%', #{policyName},'%')
+            </if>
+            <if test="submitUser != null">
+                and a.submit_user like concat('%', #{submitUser},'%')
+            </if>
+            <if test="uuidList != null and uuidList.size() > 0">
+                AND a.uuid in
+                <foreach item="item" collection="uuidList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+        </where>
+        order by a.gmt_modify desc
+    </select>
+
+    <select id="selectForRuleSet" resultMap="BaseResultExtensionMap">
+        select
+        <include refid="Base_Column_List"/>
+        ,
+        r.uuid as rule_set_uuid,
+        r.rule_set_code as rule_set_code,
+        r.rule_set_name as rule_set_name
+        from
+        tiangong_audit_info a,tiangong_rule_set r
+        <where>
+            a.source_type=2
+            and a.source_id=r.uuid
+            and r.deleted=0
+            <if test="statusList != null and statusList.size() > 0">
+                AND a.status in
+                <foreach item="item" collection="statusList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="orgCodeList != null and orgCodeList.size() > 0">
+                AND a.org_code in
+                <foreach item="item" collection="orgCodeList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="appCodeList != null and appCodeList.size() > 0">
+                AND a.app_code in
+                <foreach item="item" collection="appCodeList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="sourceType != null">
+                and a.source_type=#{sourceType}
+            </if>
+            <if test="auditType != null">
+                and a.audit_type=#{auditType}
+            </if>
+            <if test="ruleSetCode != null">
+                and r.rule_set_code=#{ruleSetCode}
+            </if>
+            <if test="ruleSetName != null">
+                and r.rule_set_name like concat('%', #{ruleSetName},'%')
+            </if>
+            <if test="submitUser != null">
+                and a.submit_user like concat('%', #{submitUser},'%')
+            </if>
+            <if test="uuidList != null and uuidList.size() > 0">
+                AND a.uuid in
+                <foreach item="item" collection="uuidList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+        </where>
+        order by a.gmt_modify desc
+    </select>
+
+    <select id="selectForFunction" resultMap="BaseResultExtensionMap">
+        select
+        <include refid="Base_Column_List"/>
+        ,
+        f.function_code,
+        f.function_name
+        from
+        tiangong_audit_info a,tiangong_function f
+        <where>
+            a.source_type=3
+            and a.source_id=f.uuid
+            and f.is_deleted=0
+            <if test="statusList != null and statusList.size() > 0">
+                AND a.status in
+                <foreach item="item" collection="statusList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="orgCodeList != null and orgCodeList.size() > 0">
+                AND a.org_code in
+                <foreach item="item" collection="orgCodeList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="appCodeList != null and appCodeList.size() > 0">
+                AND a.app_code in
+                <foreach item="item" collection="appCodeList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="sourceType != null">
+                and a.source_type=#{sourceType}
+            </if>
+            <if test="auditType != null">
+                and a.audit_type=#{auditType}
+            </if>
+            <if test="functionCode != null">
+                and f.function_code=#{functionCode}
+            </if>
+            <if test="functionName != null">
+                and f.function_name like concat('%', #{functionName},'%')
+            </if>
+            <if test="submitUser != null">
+                and a.submit_user like concat('%', #{submitUser},'%')
+            </if>
+            <if test="uuidList != null and uuidList.size() > 0">
+                AND a.uuid in
+                <foreach item="item" collection="uuidList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+        </where>
+        order by a.gmt_modify desc
+    </select>
+
+    <select id="selectForDecisionTool" resultMap="BaseResultExtensionMap">
+        select
+        <include refid="Base_Column_List"/>
+        ,
+        t.decision_tool_code,
+        t.decision_tool_name,
+        t.decision_tool_type
+        from
+        tiangong_audit_info a,tiangong_decision_tool t
+        <where>
+            a.source_type=4
+            and a.source_id=t.uuid
+            and t.is_deleted=0
+            <if test="statusList != null and statusList.size() > 0">
+                AND a.status in
+                <foreach item="item" collection="statusList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="orgCodeList != null and orgCodeList.size() > 0">
+                AND a.org_code in
+                <foreach item="item" collection="orgCodeList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="appCodeList != null and appCodeList.size() > 0">
+                AND a.app_code in
+                <foreach item="item" collection="appCodeList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+            <if test="sourceType != null">
+                and a.source_type=#{sourceType}
+            </if>
+            <if test="auditType != null">
+                and a.audit_type=#{auditType}
+            </if>
+            <if test="decisionToolCode != null">
+                and t.decision_tool_code=#{decisionToolCode}
+            </if>
+            <if test="decisionToolName != null">
+                and t.decision_tool_name like concat('%', #{decisionToolName},'%')
+            </if>
+            <if test="submitUser != null">
+                and a.submit_user like concat('%', #{submitUser},'%')
+            </if>
+            <if test="uuidList != null and uuidList.size() > 0">
+                AND a.uuid in
+                <foreach item="item" collection="uuidList" separator="," open="(" close=")" index="index">
+                    #{item}
+                </foreach>
+            </if>
+        </where>
+        order by a.gmt_modify desc
+    </select>
+</mapper>

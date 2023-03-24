@@ -12,6 +12,7 @@
         <module>concurrent</module>
         <module>sso-springboot-app</module>
         <module>TimeServer</module>
+        <module>mybatis-xml-extends-test</module>
     </modules>
 
     <properties>
