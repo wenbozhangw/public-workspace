@@ -13,6 +13,7 @@
         <module>sso-springboot-app</module>
         <module>TimeServer</module>
         <module>mybatis-xml-extends-test</module>
+        <module>spark-demo</module>
     </modules>
 
     <properties>

@@ -9,8 +9,7 @@ import org.springframework.stereotype.Service;
  * @description ：
  * @modified By ：
  */
-@Service
-public class OkService {
+public interface OkService {
 
 
 
