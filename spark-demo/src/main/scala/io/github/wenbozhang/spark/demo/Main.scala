@@ -1,16 +1,15 @@
-package io.github.wenbozhang.spark.deom;
+package io.github.wenbozhang.spark.demo
 
 import cn.tongdun.tiance.job.client.enumeration.JobReasonCodeEnum
 import cn.tongdun.tiance.job.client.model.job.JobResult
 import cn.tongdun.tiance.job.client.util.Base64Utils
 import cn.tongdun.tiance.job.common.exception.ServiceException
-import cn.tongdun.tiance.job.common.job.{SparkJob, SparkJobLogger}
+import cn.tongdun.tiance.job.common.job.SparkJobLogger
 import com.alibaba.fastjson.JSONPath
 import io.github.wenbozhang.spark.demo.enums.TianZuoInputTypeEnum
 import io.github.wenbozhang.spark.demo.job.{HiveInputSourceJob, TianZuoSparkJobExt, ZipInputSourceJob}
-import org.apache.spark.sql.SparkSession
 
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CountDownLatch
 
 object Main {
 
@@ -48,7 +47,7 @@ object Main {
       throw new ServiceException(s"$JOB_LOG_PREFIX ${jobResult.getMessage}")
     }
     logger.info("execute success!")
-    new CountDownLatch(1).await();
+    new CountDownLatch(1).await()
   }
 
   private def tryDecodeParam(param: String): String = {

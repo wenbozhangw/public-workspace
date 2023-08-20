@@ -1,5 +1,8 @@
 package io.github.wenbozhang.spark.demo.job
 
+import cn.tongdun.captain.engine.operator.cmd.IndexOfflineCalculateCmd
+import cn.tongdun.captain.engine.operator.execute.IndexOfflineExecutor
+import cn.tongdun.captain.engine.operator.model.Index
 import cn.tongdun.tiance.job.client.enumeration.JobReasonCodeEnum
 import cn.tongdun.tiance.job.client.model.job.JobResult
 import cn.tongdun.tiance.job.common.constant.DateFormatterConstants
@@ -7,7 +10,7 @@ import cn.tongdun.tiance.job.common.job.SparkJobLogger
 import cn.tongdun.tiance.job.connector.api.egress.DataFrameSink
 import cn.tongdun.tiance.job.connector.api.ingress.Column
 import cn.tongdun.tiance.job.connector.impl.egress.{HiveDataFrameSink, HiveDataFrameSinkConfig}
-import cn.tongdun.tianzuo.captain.client.entity.dto.IndexConfig
+import cn.tongdun.tianzuo.captain.common.constant.ContentType
 import cn.tongdun.tianzuo.captain.common.constant.DataType._
 import com.alibaba.fastjson.JSON
 import io.github.wenbozhang.spark.demo.data.MainArgsContext
@@ -54,9 +57,9 @@ abstract class TianZuoSparkJobExt[T] {
   }
 
 
-  val MESSAGE_COLUMN_NAME: String = "message";
+  val MESSAGE_COLUMN_NAME: String = "message"
 
-  private val PARTITION_COLUMN_NAME: String = "ds";
+  private val PARTITION_COLUMN_NAME: String = "ds"
 
   def runJob(args: Array[String]): JobResult = {
     val config: MainArgsContext = JSON.parseObject(args(0), classOf[MainArgsContext])
@@ -66,17 +69,33 @@ abstract class TianZuoSparkJobExt[T] {
     val ds = config.getExecuteDate.toLocalDate.format(DateFormatterConstants.Formatter_yyyy_MM_dd)
 
     val messageDf = loadMessages(config).cache()
+    val docFields = config.getDocFields
+    val documentTypeUuid = config.getDocumentTypeUuid
+
+    val contentType = ContentType.of(config.getMessageType)
+    val executor = new IndexOfflineExecutor()
 
     val errorList = config.getFeatureSets.asScala.map(ctx => {
         val dimFeatureCode = ctx.getDimFeatureCode
+        val templateConfigList = ctx.getTemplateConfigList
         val features = ctx.getFeatures.asScala
         val resultDF = messageDf.map(new MapFunction[Row, Row] {
-          override def call(msgRow: Row): Row = {
-            val msg: String = msgRow.getAs(MESSAGE_COLUMN_NAME)
+          override def call(content: Row): Row = {
+            val fileContent: String = content.getAs(MESSAGE_COLUMN_NAME)
             val resultMapping: Map[String, Any] = features.map(feature => {
               // calc
-              val res = msg;
-              (feature.getName, res)
+              val cmd = new IndexOfflineCalculateCmd(
+                fileContent,
+                contentType,
+                documentTypeUuid,
+                ctx.getFeatureSetCode,
+                ctx.getFeatures,
+                docFields,
+                feature,
+                templateConfigList
+              );
+              val featureValue = executor.execute(cmd).get(0).getResult
+              (feature.getName, featureValue)
             }).toMap
 
             val resultList = resultMapping.get(dimFeatureCode) +: features
@@ -96,24 +115,21 @@ abstract class TianZuoSparkJobExt[T] {
       .filter(res => res.getCode != JobReasonCodeEnum.SPARK_RUN_SUCCESS.getCode)
       .toList
 
-    if (errorList.isEmpty) (
-      JobResult.of(JobReasonCodeEnum.SPARK_RUN_SUCCESS)
-      ) else {
-      new JobResult(JobReasonCodeEnum.UNKNOWN_ERROR.getCode, errorList.map(e => s"${e.getCode}: ${e.getMessage}").mkString("\n,"));
-    }
+    if (errorList.isEmpty) JobResult.of(JobReasonCodeEnum.SPARK_RUN_SUCCESS)
+    else new JobResult(JobReasonCodeEnum.UNKNOWN_ERROR.getCode, errorList.map(e => s"${e.getCode}: ${e.getMessage}").mkString("\n,"))
   }
 
-  def jobSink(sink: DataFrameSink,
-              df: DataFrame,
-              errorCode: JobReasonCodeEnum = JobReasonCodeEnum.SINK_ERROR)
-             (implicit sparkSession: SparkSession, logger: SparkJobLogger): JobResult = {
+  private def jobSink(sink: DataFrameSink,
+                      df: DataFrame,
+                      errorCode: JobReasonCodeEnum = JobReasonCodeEnum.SINK_ERROR)
+                     (implicit sparkSession: SparkSession, logger: SparkJobLogger): JobResult = {
     sink.sink(df) match {
       case Failure(t) => jobFail(errorCode, t)
       case Success(x) => logger.info(s"$x"); jobSuccess()
     }
   }
 
-  def jobFail(reason: JobReasonCodeEnum, throwable: Throwable = null): JobResult = {
+  private def jobFail(reason: JobReasonCodeEnum, throwable: Throwable = null): JobResult = {
     if (throwable != null) {
       new JobResult(reason.getCode, jobName + reason.getDesc + throwable.getMessage + ExceptionUtils.getStackTrace(throwable))
     } else {
@@ -121,10 +137,10 @@ abstract class TianZuoSparkJobExt[T] {
     }
   }
 
-  def jobSuccess(): JobResult = JobResult.of(JobReasonCodeEnum.SPARK_RUN_SUCCESS)
+  private def jobSuccess(): JobResult = JobResult.of(JobReasonCodeEnum.SPARK_RUN_SUCCESS)
 
 
-  private def buildFeatureSetRowStruct(features: mutable.Buffer[IndexConfig],
+  private def buildFeatureSetRowStruct(features: mutable.Buffer[Index],
                                        dimFieldCode: String): StructType = {
     val structType = new StructType().add(dimFieldCode, DataTypes.StringType)
     features.foreach(r => {

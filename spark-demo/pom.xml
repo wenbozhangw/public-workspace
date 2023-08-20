@@ -579,7 +579,7 @@
     <dependencies>
         <dependency>
             <groupId>cn.tongdun.tianzuo-captain</groupId>
-            <artifactId>tianzuo-captain-client</artifactId>
+            <artifactId>captain-operator</artifactId>
             <version>3.3.5-tiangong-153-icbc-SNAPSHOT</version>
         </dependency>
 

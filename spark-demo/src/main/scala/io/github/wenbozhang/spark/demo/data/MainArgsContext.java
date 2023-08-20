@@ -1,5 +1,7 @@
 package io.github.wenbozhang.spark.demo.data;
 
+import cn.tongdun.captain.engine.operator.model.Field;
+
 import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.Date;
@@ -34,6 +36,10 @@ public class MainArgsContext implements Serializable {
     private Integer inputType;
 
     private Integer messageType;
+
+    private String documentTypeUuid;
+
+    private List<Field> docFields;
 
     /**
      * input type of ZIP
@@ -117,5 +123,21 @@ public class MainArgsContext implements Serializable {
 
     public void setExecuteDate(LocalDateTime executeDate) {
         this.executeDate = executeDate;
+    }
+
+    public String getDocumentTypeUuid() {
+        return documentTypeUuid;
+    }
+
+    public void setDocumentTypeUuid(String documentTypeUuid) {
+        this.documentTypeUuid = documentTypeUuid;
+    }
+
+    public List<Field> getDocFields() {
+        return docFields;
+    }
+
+    public void setDocFields(List<Field> docFields) {
+        this.docFields = docFields;
     }
 }

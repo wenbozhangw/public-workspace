@@ -1,5 +1,7 @@
 package io.github.wenbozhang.spark.demo.data;
 
+import cn.tongdun.captain.engine.operator.model.Index;
+import cn.tongdun.captain.engine.operator.model.Template;
 import cn.tongdun.tianzuo.captain.client.entity.dto.IndexConfig;
 
 import java.io.Serializable;
@@ -13,7 +15,9 @@ public class TianZuoFeatureSetContext implements Serializable {
 
     private static final long serialVersionUID = -7934994400434335335L;
 
-    private List<IndexConfig> features;
+    private List<Index> features;
+
+    private List<Template> templateConfigList;
 
     private String featureSetCode;
 
@@ -23,7 +27,7 @@ public class TianZuoFeatureSetContext implements Serializable {
 
     private String outputTable;
 
-    public void setFeatures(List<IndexConfig> features) {
+    public void setFeatures(List<Index> features) {
         this.features = features;
     }
 
@@ -43,7 +47,7 @@ public class TianZuoFeatureSetContext implements Serializable {
         this.dimFeatureCode = dimFeatureCode;
     }
 
-    public List<IndexConfig> getFeatures() {
+    public List<Index> getFeatures() {
         return features;
     }
 
@@ -62,4 +66,13 @@ public class TianZuoFeatureSetContext implements Serializable {
     public String getOutputTable() {
         return outputTable;
     }
+
+    public List<Template> getTemplateConfigList() {
+        return templateConfigList;
+    }
+
+    public void setTemplateConfigList(List<Template> templateConfigList) {
+        this.templateConfigList = templateConfigList;
+    }
 }
+
