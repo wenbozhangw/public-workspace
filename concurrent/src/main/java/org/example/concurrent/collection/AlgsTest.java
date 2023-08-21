@@ -10,13 +10,6 @@ public class AlgsTest {
 
     public static void main(String[] args) {
         buildTree(new int[]{9,3,15,20,7}, new int[]{9,15,7,20,3});
-
-        List<Integer> res = new ArrayList<>();
-        for (int j = 1; j <= n; j++) {
-            if (tags[j] == 0) {
-                res.add(j + 1);
-            }
-        }
     }
 
     static Map<Integer, Integer> map = new HashMap<>();

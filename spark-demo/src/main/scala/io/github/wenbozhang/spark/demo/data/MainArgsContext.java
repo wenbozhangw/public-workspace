@@ -1,10 +1,7 @@
 package io.github.wenbozhang.spark.demo.data;
 
-import cn.tongdun.captain.engine.operator.model.Field;
-
 import java.io.Serializable;
 import java.time.LocalDateTime;
-import java.util.Date;
 import java.util.List;
 
 /**
@@ -31,15 +28,15 @@ public class MainArgsContext implements Serializable {
 
     private String dimFieldCode;
 
-    private LocalDateTime executeDate;
+    private String partitionValue;
 
     private Integer inputType;
 
-    private Integer messageType;
+    private Integer contentTypeCode;
 
     private String documentTypeUuid;
 
-    private List<Field> docFields;
+    private String docFields;
 
     /**
      * input type of ZIP
@@ -65,8 +62,8 @@ public class MainArgsContext implements Serializable {
         this.inputType = inputType;
     }
 
-    public void setMessageType(Integer messageType) {
-        this.messageType = messageType;
+    public void setContentTypeCode(Integer contentTypeCode) {
+        this.contentTypeCode = contentTypeCode;
     }
 
     public void setPaths(List<String> paths) {
@@ -101,8 +98,8 @@ public class MainArgsContext implements Serializable {
         return inputType;
     }
 
-    public Integer getMessageType() {
-        return messageType;
+    public Integer getContentTypeCode() {
+        return contentTypeCode;
     }
 
     public List<String> getPaths() {
@@ -117,12 +114,12 @@ public class MainArgsContext implements Serializable {
         return columnName;
     }
 
-    public LocalDateTime getExecuteDate() {
-        return executeDate;
+    public String getPartitionValue() {
+        return partitionValue;
     }
 
-    public void setExecuteDate(LocalDateTime executeDate) {
-        this.executeDate = executeDate;
+    public void setPartitionValue(String partitionValue) {
+        this.partitionValue = partitionValue;
     }
 
     public String getDocumentTypeUuid() {
@@ -133,11 +130,11 @@ public class MainArgsContext implements Serializable {
         this.documentTypeUuid = documentTypeUuid;
     }
 
-    public List<Field> getDocFields() {
+    public String getDocFields() {
         return docFields;
     }
 
-    public void setDocFields(List<Field> docFields) {
+    public void setDocFields(String docFields) {
         this.docFields = docFields;
     }
 }

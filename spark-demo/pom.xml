@@ -123,6 +123,12 @@
                 <scope>import</scope>
             </dependency>
 
+            <dependency>
+                <groupId>org.codehaus.janino</groupId>
+                <artifactId>commons-compiler</artifactId>
+                <version>3.1.2</version>
+            </dependency>
+
             <!--   Current Project Sub Modules     -->
             <dependency>
                 <groupId>cn.tongdun</groupId>
@@ -583,6 +589,11 @@
             <version>3.3.5-tiangong-153-icbc-SNAPSHOT</version>
         </dependency>
 
+        <dependency>
+            <groupId>org.codehaus.janino</groupId>
+            <artifactId>commons-compiler</artifactId>
+            <version>3.1.2</version>
+        </dependency>
 
         <!--    Sibling modules    -->
         <dependency>

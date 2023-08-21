@@ -9,8 +9,6 @@ import java.util.Arrays;
  * @author wenbo.zhangw
  * @date 2023/8/8 14:35
  */
-@Getter
-@AllArgsConstructor
 public enum TianZuoInputTypeEnum {
     /**
      * HIVE 表
@@ -22,6 +20,19 @@ public enum TianZuoInputTypeEnum {
     private final Integer code;
 
     private final String description;
+
+    TianZuoInputTypeEnum(Integer code, String description) {
+        this.code = code;
+        this.description = description;
+    }
+
+    public Integer getCode() {
+        return code;
+    }
+
+    public String getDescription() {
+        return description;
+    }
 
     public static TianZuoInputTypeEnum getByCode(Integer code){
        return Arrays.stream(TianZuoInputTypeEnum.values())
